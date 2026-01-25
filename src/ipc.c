@@ -160,8 +160,10 @@ static int ipc_connect(int sockfd, struct ipc_msg *msg)
     struct ipc_connect *payload = (struct ipc_connect *)msg->data;
     pid_t pid = msg->pid;
     int rc = -1;
+    struct sockaddr temp_addr;
 
-    rc = _connect(pid, payload->sockfd, &payload->addr, payload->addrlen);
+    memcpy(&temp_addr, &payload->addr, payload->addrlen);
+    rc = _connect(pid, payload->sockfd, &temp_addr, payload->addrlen);
 
     return ipc_write_rc(sockfd, pid, IPC_CONNECT, rc);
 }
@@ -271,8 +273,9 @@ static int ipc_getsockopt(int sockfd, struct ipc_msg *msg)
 
     pid_t pid = msg->pid;
     int rc = -1;
+    socklen_t tmpoptlen = opts->optlen;
 
-    rc = _getsockopt(pid, opts->fd, opts->level, opts->optname, opts->optval, &opts->optlen);
+    rc = _getsockopt(pid, opts->fd, opts->level, opts->optname, opts->optval, &tmpoptlen);
 
     int resplen = sizeof(struct ipc_msg) + sizeof(struct ipc_err) + sizeof(struct ipc_sockopt) + opts->optlen;
     struct ipc_msg *response = alloca(resplen);
@@ -469,7 +472,7 @@ void *start_ipc_listener()
 
     unlink(sockname);
     
-    if (strnlen(sockname, sizeof(un.sun_path)) == sizeof(un.sun_path)) {
+    if (strlen(sockname) >= sizeof(un.sun_path)) {
         // Path is too long
         print_err("Path for UNIX socket is too long\n");
         exit(-1);
