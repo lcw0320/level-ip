@@ -6,11 +6,14 @@
 #include "wait.h"
 
 extern struct net_ops tcp_ops;
+extern struct net_ops udp_ops;
 
 static int inet_stream_connect(struct socket *sock, const struct sockaddr *addr,
                                int addr_len, int flags);
+static int inet_dgram_connect(struct socket *sock, const struct sockaddr *addr,
+                              int addr_len, int flags);
 
-static int INET_OPS = 1;
+static int INET_OPS = 2;
 
 struct net_family inet = {
     .create = inet_create,
@@ -27,12 +30,32 @@ static struct sock_ops inet_stream_ops = {
     .getsockname = &inet_getsockname,
 };
 
+static struct sock_ops inet_dgram_ops = {
+    .connect = &inet_dgram_connect,
+    .write = &inet_write,
+    .read = &inet_read,
+    .close = &inet_close,
+    .free = &inet_free,
+    .abort = &inet_abort,
+    .getpeername = &inet_getpeername,
+    .getsockname = &inet_getsockname,
+    .bind = &inet_bind,
+    .sendto = &inet_sendto,
+    .recvfrom = &inet_recvfrom,
+};
+
 static struct sock_type inet_ops[] = {
     {
         .sock_ops = &inet_stream_ops,
         .net_ops = &tcp_ops,
         .type = SOCK_STREAM,
         .protocol = IPPROTO_TCP,
+    },
+    {
+        .sock_ops = &inet_dgram_ops,
+        .net_ops = &udp_ops,
+        .type = SOCK_DGRAM,
+        .protocol = IPPROTO_UDP,
     }
 };
 
@@ -53,10 +76,15 @@ int inet_create(struct socket *sock, int protocol)
         return 1;
     }
 
+    if (protocol == 0) {
+        /* set default protocol */
+        protocol = skt->protocol;
+    }
+
     sock->ops = skt->sock_ops;
 
-    sk = sk_alloc(skt->net_ops, protocol);
-    sk->protocol = protocol;
+    sk = sk_alloc(skt->net_ops, skt->protocol);
+    sk->protocol = skt->protocol;
     
     sock_init_data(sock, sk);
     
@@ -143,11 +171,63 @@ sock_error:
     return rc;
 }
 
+int inet_bind(struct socket *sock, const struct sockaddr *addr,
+                        int addr_len)
+{
+    struct sock *sk = sock->sk;
+    
+    if (addr_len < sizeof(addr->sa_family)) {
+        return -EINVAL;
+    }
+
+    if (addr->sa_family == AF_UNSPEC) {
+        return -EAFNOSUPPORT;
+    }
+
+    sk->ops->bind(sk, addr, addr_len);
+
+    return sk->err;
+}
+
+
+static int inet_dgram_connect(struct socket *sock, const struct sockaddr *addr,
+                              int addr_len, int flags)
+{
+    struct sock *sk = sock->sk;
+    struct sockaddr_in *sin = (struct sockaddr_in *)addr;
+
+    if (addr_len < sizeof(*sin) || addr->sa_family != AF_INET) {
+        return -EINVAL;
+    }
+
+    sk->daddr = ntohl(sin->sin_addr.s_addr);
+    sk->dport = ntohs(sin->sin_port);
+    sock->state = SS_CONNECTED; // 可选，表示已“连接”
+
+    return 0;
+}
+
 int inet_write(struct socket *sock, const void *buf, int len)
 {
     struct sock *sk = sock->sk;
 
     return sk->ops->write(sk, buf, len);
+}
+
+int inet_sendto(struct socket *sock, const void *buf, int len, int flags,
+                const struct sockaddr *addr, int addr_len)
+{
+    struct sock *sk = sock->sk;
+
+    return sk->ops->sendto(sk, buf, len, flags, addr, addr_len);
+}
+
+int inet_recvfrom(struct socket *sock, void *buf, int len, int flags,
+                struct sockaddr *addr, socklen_t *restrict addr_len)
+{
+    struct sock *sk = sock->sk;
+
+    return sk->ops->recvfrom(sk, buf, len, flags, addr, addr_len);
 }
 
 int inet_read(struct socket *sock, void *buf, int len)

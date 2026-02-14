@@ -451,7 +451,7 @@ sudo ./lvl-ip
 echo "test message" | nc -u 10.0.0.4 8888
 
 # 终端 3: 抓包验证
-sudo tcpdump -i tap0 udp port 8888 -n -vvv
+sudo tcpdump -i tap0 -n -vvv -XX udp port 8888
 ```
 
 **预期结果：**

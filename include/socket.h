@@ -50,6 +50,13 @@ struct sock_ops {
                         socklen_t *restrict address_len);
     int (*getsockname) (struct socket *sock, struct sockaddr *restrict addr,
                         socklen_t *restrict address_len);
+    int (*bind)(struct socket *sock, const struct sockaddr *addr, int addr_len);
+    int (*send)(struct socket *sock, const void *buf, int len, int flags);
+    int (*sendto)(struct socket *sock, const void *buf, int len, int flags,
+                const struct sockaddr *addr, int addr_len);
+    int (*recv)(struct socket *sock, void *buf, int len, int flags);
+    int (*recvfrom)(struct socket *sock, void *buf, int len, int flags,
+                    struct sockaddr *addr, socklen_t *addr_len);
 };
 
 struct net_family {
@@ -73,6 +80,9 @@ struct socket {
 void *socket_ipc_open(void *args);
 int _socket(pid_t pid, int domain, int type, int protocol);
 int _connect(pid_t pid, int sockfd, const struct sockaddr *addr, socklen_t addrlen);
+int _bind(pid_t pid, int sockfd, const struct sockaddr *addr, socklen_t addrlen);
+int _sendto(pid_t pid, int sockfd, const void *buf, const unsigned int count, int flags, const struct sockaddr *addr, socklen_t addrlen);
+int _recvfrom(pid_t pid, int sockfd, void *buf, const unsigned int count, int flags, struct sockaddr *restrict address, socklen_t *restrict addrlen);
 int _write(pid_t pid, int sockfd, const void *buf, const unsigned int count);
 int _read(pid_t pid, int sockfd, void *buf, const unsigned int count);
 int _close(pid_t pid, int sockfd);
@@ -86,6 +96,7 @@ int _getsockname(pid_t pid, int socket, struct sockaddr *restrict address,
 
 struct socket *socket_lookup(uint16_t sport, uint16_t dport);
 struct socket *socket_find(struct socket *sock);
+struct socket *socker_find_protocol_port(uint16_t port, int protocol);
 int socket_rd_acquire(struct socket *sock);
 int socket_wr_acquire(struct socket *sock);
 int socket_release(struct socket *sock);

@@ -152,7 +152,12 @@ struct socket *socket_lookup(uint16_t remoteport, uint16_t localport)
         if (sock == NULL || sock->sk == NULL) continue;
         sk = sock->sk;
 
+        print_debug("socket_lookup socket sport: %u, socket dport: %u, socket protocol: %u, remoteport: %u, localport: %u\n",
+           ntohs(sk->sport), ntohs(sk->dport), sk->protocol, ntohs(remoteport), ntohs(localport));
         if (sk->sport == localport && sk->dport == remoteport) {
+            goto found;
+        } else if (sk->protocol == IPPROTO_UDP && sk->sport == localport) {
+            // UDP only need to match dest port
             goto found;
         }
     }
@@ -177,6 +182,32 @@ struct socket *socket_find(struct socket *find)
     sock = NULL;
 
 out:
+    pthread_rwlock_unlock(&slock);
+    return sock;
+}
+
+struct socket *socker_find_protocol_port(uint16_t port, int protocol)
+{
+    struct list_head *item;
+    struct socket *sock = NULL;
+    struct sock *sk = NULL;
+
+    pthread_rwlock_rdlock(&slock);
+    
+    list_for_each(item, &sockets) {
+        sock = list_entry(item, struct socket, list);
+
+        if (sock == NULL || sock->sk == NULL) continue;
+        sk = sock->sk;
+
+        if (sk->protocol == protocol && sk->sport == port) {
+            // UDP only need to match dest port
+            goto found;
+        }
+    }
+
+    sock = NULL;
+found:
     pthread_rwlock_unlock(&slock);
     return sock;
 }
@@ -273,6 +304,38 @@ int _connect(pid_t pid, int sockfd, const struct sockaddr *addr, socklen_t addrl
     return rc;
 }
 
+int _bind(pid_t pid, int sockfd, const struct sockaddr *addr, socklen_t addrlen)
+{
+    struct socket *sock;
+
+    if ((sock = get_socket(pid, sockfd)) == NULL) {
+        print_err("Connect: could not find socket (fd %u) for connection (pid %d)\n", sockfd, pid);
+        return -EBADF;
+    }
+
+    socket_wr_acquire(sock);
+    int rc = sock->ops->bind(sock, addr, addrlen);
+    socket_release(sock);
+
+    return rc;
+}
+
+int _sendto(pid_t pid, int sockfd, const void *buf, const unsigned int count, int flags, const struct sockaddr *addr, socklen_t addrlen)
+{
+    struct socket *sock;
+
+    if ((sock = get_socket(pid, sockfd)) == NULL) {
+        print_err("Sendto: could not find socket (fd %u) for connection (pid %d)\n", sockfd, pid);
+        return -EBADF;
+    }
+
+    socket_wr_acquire(sock);
+    int rc = sock->ops->sendto(sock, buf, count, flags, addr, addrlen);
+    socket_release(sock);
+
+    return rc;
+}
+
 int _write(pid_t pid, int sockfd, const void *buf, const unsigned int count)
 {
     struct socket *sock;
@@ -304,6 +367,23 @@ int _read(pid_t pid, int sockfd, void *buf, const unsigned int count)
 
     return rc;
 }
+
+int _recvfrom(pid_t pid, int sockfd, void *buf, const unsigned int count, int flags, struct sockaddr *restrict address, socklen_t *restrict addrlen)
+{
+    struct socket *sock;
+
+    if ((sock = get_socket(pid, sockfd)) == NULL) {
+        print_err("Read: could not find socket (fd %u) for connection (pid %d)\n", sockfd, pid);
+        return -EBADF;
+    }
+
+    socket_wr_acquire(sock);
+    int rc = sock->ops->recvfrom(sock, buf, count, flags, address, addrlen);
+    socket_release(sock);
+
+    return rc;
+}
+
 
 int _close(pid_t pid, int sockfd)
 {

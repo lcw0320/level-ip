@@ -153,7 +153,7 @@ int generate_iss()
     return (int)time(NULL) * rand();
 }
 
-int tcp_v4_connect(struct sock *sk, const struct sockaddr *addr, int addrlen, int flags)
+int tcp_v4_connect(struct sock *sk, const struct sockaddr *addr, socklen_t addrlen, int flags)
 {
     uint16_t dport = ((struct sockaddr_in *)addr)->sin_port;
     uint32_t daddr = ((struct sockaddr_in *)addr)->sin_addr.s_addr;

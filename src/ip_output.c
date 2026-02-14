@@ -1,6 +1,7 @@
 #include "syshead.h"
 #include "skbuff.h"
 #include "utils.h"
+#include "udp.h"
 #include "ip.h"
 #include "dst.h"
 #include "route.h"
@@ -49,6 +50,11 @@ int ip_output(struct sock *sk, struct sk_buff *skb)
     ihdr->saddr = htonl(ihdr->saddr);
     ihdr->csum = htons(ihdr->csum);
     ihdr->frag_offset = htons(ihdr->frag_offset);
+
+    if (ihdr->proto == IP_UDP) {
+        struct udphdr *udphdr = udp_hdr(skb);
+        udphdr->csum = calcuate_udp_checksum(ihdr->saddr, ihdr->daddr, udphdr);
+    }
 
     ip_send_check(ihdr);
 

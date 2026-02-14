@@ -168,6 +168,73 @@ static int ipc_connect(int sockfd, struct ipc_msg *msg)
     return ipc_write_rc(sockfd, pid, IPC_CONNECT, rc);
 }
 
+static int ipc_bind(int sockfd, struct ipc_msg *msg)
+{
+    struct ipc_bind *payload = (struct ipc_bind *)msg->data;
+    pid_t pid = msg->pid;
+    int rc = -1;
+    struct sockaddr temp_addr;
+
+    memcpy(&temp_addr, &payload->addr, payload->addrlen);
+    rc = _bind(pid, payload->sockfd, &temp_addr, payload->addrlen);
+
+    return ipc_write_rc(sockfd, pid, IPC_BIND, rc);
+}
+
+static int ipc_sendto(int sockfd, struct ipc_msg *msg)
+{
+    struct ipc_sendto *payload = (struct ipc_sendto *)msg->data;
+    pid_t pid = msg->pid;
+    int rc = -1;
+    struct sockaddr temp_addr;
+
+    memcpy(&temp_addr, &payload->addr, payload->addrlen);
+    rc = _sendto(pid, payload->sockfd, (void*)payload->buf, payload->len, payload->flags, &temp_addr, payload->addrlen);
+
+    return ipc_write_rc(sockfd, pid, IPC_SENDTO, rc);
+}
+
+static int ipc_recvfrom(int sockfd, struct ipc_msg *msg)
+{
+    struct ipc_recvfrom *requested = (struct ipc_recvfrom *) msg->data;
+    struct sockaddr addr = {0};
+    socklen_t addrlen = requested->dstlen;
+    pid_t pid = msg->pid;
+    int rlen = -1;
+    char rbuf[requested->len];
+
+    rlen = _recvfrom(pid, requested->sockfd, rbuf, requested->len, requested->flags, &addr, &addrlen);
+
+    int resplen = sizeof(struct ipc_msg) + sizeof(struct ipc_err) +
+        sizeof(struct ipc_recvfrom) + (rlen > 0 ? rlen : 0);
+    struct ipc_msg *response = alloca(resplen);
+    struct ipc_err *error = (struct ipc_err *) response->data;
+    struct ipc_recvfrom *actual = (struct ipc_recvfrom *) error->data;
+
+    if (response == NULL) {
+        print_err("Could not allocate memory for IPC read response\n");
+        return -1;
+    }
+    
+    response->type = IPC_RECVFROM;
+    response->pid = pid;
+
+    error->rc = rlen < 0 ? -1 : rlen;
+    error->err = rlen < 0 ? -rlen : 0;
+
+    actual->sockfd = requested->sockfd;
+    actual->len = rlen;
+    memcpy(actual->buf, rbuf, rlen > 0 ? rlen : 0);
+    memcpy(&actual->dstaddr, &addr, addrlen);
+    actual->dstlen = addrlen;
+
+    if (ipc_try_send(sockfd, (char *)response, resplen) == -1) {
+        perror("Error on writing IPC read response");
+    }
+
+    return 0;
+}
+
 static int ipc_socket(int sockfd, struct ipc_msg *msg)
 {
     struct ipc_socket *sock = (struct ipc_socket *)msg->data;
@@ -431,6 +498,12 @@ static int demux_ipc_socket_call(int sockfd, char *cmdbuf, int blen)
         return ipc_getpeername(sockfd, msg);
     case IPC_GETSOCKNAME:
         return ipc_getsockname(sockfd, msg);
+    case IPC_BIND:
+        return ipc_bind(sockfd, msg);
+    case IPC_SENDTO:
+        return ipc_sendto(sockfd, msg);
+    case IPC_RECVFROM:
+        return ipc_recvfrom(sockfd, msg);
     default:
         print_err("No such IPC type %d\n", msg->type);
         break;
