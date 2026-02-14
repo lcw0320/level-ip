@@ -3,6 +3,18 @@
 
 extern int debug;
 
+void print_buffer_hexdump(void *buffer, int size)
+{
+    char hexdump_buffer[2048] = {0};
+    uint8_t *ptr = (uint8_t *)buffer;
+
+    for (int i = 0; i < size; i++) {
+        snprintf(hexdump_buffer + 3*i, 4, "%02x ", *(ptr+i));
+    }
+
+    print_debug("hexdump_buffer: %s\n", hexdump_buffer);
+}
+
 int run_cmd(char *cmd, ...)
 {
     va_list ap;

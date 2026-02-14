@@ -33,11 +33,11 @@ In essence, `lvl-ip` operates as a host inside the tap device's subnet. Therefor
 
 An example from my (Arch) Linux machine, where `wlp2s0` is my outgoing interface, and `tap0` is the tap device for `lvl-ip`:
 
-    $ sysctl -w net.ipv4.ip_forward=1
-    $ iptables -I INPUT --source 10.0.0.0/24 -j ACCEPT
-    $ iptables -t nat -I POSTROUTING --out-interface wlp2s0 -j MASQUERADE
-    $ iptables -I FORWARD --in-interface wlp2s0 --out-interface tap0 -j ACCEPT
-    $ iptables -I FORWARD --in-interface tap0 --out-interface wlp2s0 -j ACCEPT
+    sudo sysctl -w net.ipv4.ip_forward=1
+    sudo iptables -I INPUT --source 10.0.0.0/24 -j ACCEPT
+    sudo iptables -t nat -I POSTROUTING --out-interface wlp2s0 -j MASQUERADE
+    sudo iptables -I FORWARD --in-interface wlp2s0 --out-interface tap0 -j ACCEPT
+    sudo iptables -I FORWARD --in-interface tap0 --out-interface wlp2s0 -j ACCEPT
 
 Now, packets coming from `lvl-ip` (10.0.0.4/24 in this case) should be NATed by the host Linux interfaces and traverse the FORWARD chain correctly to the host's outgoing gateway.
 
