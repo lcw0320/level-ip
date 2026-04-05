@@ -8,6 +8,8 @@
 extern struct net_ops tcp_ops;
 extern struct net_ops udp_ops;
 
+int inet_stream_listen(struct socket *sock, int n);
+int inet_stream_accept(struct socket *sock, struct sockaddr *__restrict__ addr, socklen_t *__restrict__ addr_len);
 static int inet_stream_connect(struct socket *sock, const struct sockaddr *addr,
                                int addr_len, int flags);
 static int inet_dgram_connect(struct socket *sock, const struct sockaddr *addr,
@@ -21,6 +23,9 @@ struct net_family inet = {
 
 static struct sock_ops inet_stream_ops = {
     .connect = &inet_stream_connect,
+    .bind = &inet_bind,
+    .listen = &inet_stream_listen,
+    .accept = &inet_stream_accept,
     .write = &inet_write,
     .read = &inet_read,
     .close = &inet_close,
@@ -183,12 +188,45 @@ int inet_bind(struct socket *sock, const struct sockaddr *addr,
     if (addr->sa_family == AF_UNSPEC) {
         return -EAFNOSUPPORT;
     }
+    
+    // check if addr is assigned
+    uint32_t bindaddr = sockaddr_addr(addr);
+    if (!netdev_get(ntohl(bindaddr))) {
+        return -EADDRNOTAVAIL;
+    }
 
     sk->ops->bind(sk, addr, addr_len);
 
     return sk->err;
 }
 
+int inet_stream_listen(struct socket *sock, int n)
+{
+    struct sock *sk = sock->sk;
+    
+    if ((n < 0) || (n > 100)) {
+        return -EINVAL;
+    }
+
+    sk->ops->listen(sk, n);
+
+    return sk->err;
+}
+
+int inet_stream_accept(struct socket *sock, struct sockaddr *__restrict__ addr, socklen_t *__restrict__ addr_len)
+{
+    struct sock *sk = sock->sk;
+    
+    if (*addr_len < sizeof(addr->sa_family)) {
+        return -EINVAL;
+    }
+
+    if (addr->sa_family == AF_UNSPEC) {
+        return -EAFNOSUPPORT;
+    }
+
+    return sk->ops->accept(sk, addr, addr_len);
+}
 
 static int inet_dgram_connect(struct socket *sock, const struct sockaddr *addr,
                               int addr_len, int flags)
@@ -237,9 +275,9 @@ int inet_read(struct socket *sock, void *buf, int len)
     return sk->ops->read(sk, buf, len);
 }
 
-struct sock *inet_lookup(struct sk_buff *skb, uint16_t sport, uint16_t dport)
+struct sock *inet_lookup(struct sk_buff *skb, uint32_t saddr, uint32_t daddr, uint16_t sport, uint16_t dport)
 {
-    struct socket *sock = socket_lookup(sport, dport);
+    struct socket *sock = socket_lookup(saddr, daddr, sport, dport);
     if (sock == NULL) return NULL;
     
     return sock->sk;

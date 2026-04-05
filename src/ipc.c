@@ -181,6 +181,56 @@ static int ipc_bind(int sockfd, struct ipc_msg *msg)
     return ipc_write_rc(sockfd, pid, IPC_BIND, rc);
 }
 
+static int ipc_listen(int sockfd, struct ipc_msg *msg)
+{
+    struct ipc_listen *payload = (struct ipc_listen*)msg->data;
+    pid_t pid = msg->pid;
+    int rc = -1;
+    
+    rc = _listen(pid, payload->sockfd, payload->n);
+
+    return ipc_write_rc(sockfd, pid, IPC_LISTEN, rc);
+}
+
+static int ipc_accept(int sockfd, struct ipc_msg *msg)
+{
+    struct ipc_accept *payload = (struct ipc_accept*)msg->data;
+    pid_t pid = msg->pid;
+    struct sockaddr addr = {0};
+    socklen_t addr_len = payload->addr_len;
+    int rc = -1;
+
+    memcpy(&addr, &payload->addr, sizeof(struct sockaddr));
+    
+    rc = _accept(pid, payload->sockfd, &addr, addr_len);
+
+    int resplen = sizeof(struct ipc_msg) + sizeof(struct ipc_err) + sizeof(struct ipc_accept);
+    struct ipc_msg *response = alloca(resplen);
+    struct ipc_err *error = (struct ipc_err *) response->data;
+    struct ipc_accept *actual = (struct ipc_accept *) error->data;
+
+    if (response == NULL) {
+        print_err("Could not allocate memory for IPC read response\n");
+        return -1;
+    }
+    
+    response->type = IPC_ACCEPT;
+    response->pid = pid;
+
+    error->rc = rc;
+    error->err = rc;
+
+    actual->sockfd = rc;
+    memcpy(&actual->addr, &addr, sizeof(struct sockaddr));
+    memcpy(&actual->addr_len, &addr_len, sizeof(socklen_t));
+
+    if (ipc_try_send(sockfd, (char *)response, resplen) == -1) {
+        perror("Error on writing IPC read response");
+    }
+
+    return 0;
+}
+
 static int ipc_sendto(int sockfd, struct ipc_msg *msg)
 {
     struct ipc_sendto *payload = (struct ipc_sendto *)msg->data;
@@ -504,6 +554,10 @@ static int demux_ipc_socket_call(int sockfd, char *cmdbuf, int blen)
         return ipc_sendto(sockfd, msg);
     case IPC_RECVFROM:
         return ipc_recvfrom(sockfd, msg);
+    case IPC_LISTEN:
+        return ipc_listen(sockfd, msg);
+    case IPC_ACCEPT:
+        return ipc_accept(sockfd, msg);
     default:
         print_err("No such IPC type %d\n", msg->type);
         break;

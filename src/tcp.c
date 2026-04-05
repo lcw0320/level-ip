@@ -20,6 +20,9 @@ struct net_ops tcp_ops = {
     .alloc_sock = &tcp_alloc_sock,
     .init = &tcp_v4_init_sock,
     .connect = &tcp_v4_connect,
+    .bind = &tcp_v4_bind,
+    .listen = &tcp_v4_listen,
+    .accept = &tcp_v4_accept,
     .disconnect = &tcp_disconnect,
     .write = &tcp_write,
     .read = &tcp_read,
@@ -65,7 +68,7 @@ void tcp_in(struct sk_buff *skb)
 
     tcp_init_segment(th, iph, skb);
     
-    sk = inet_lookup(skb, th->sport, th->dport);
+    sk = inet_lookup(skb, iph->saddr, iph->daddr, th->sport, th->dport);
 
     if (sk == NULL) {
         print_err("No TCP socket for sport %d dport %d\n",
@@ -79,7 +82,7 @@ void tcp_in(struct sk_buff *skb)
     /* if (tcp_checksum(iph, th) != 0) { */
     /*     goto discard; */
     /* } */
-    tcp_input_state(sk, th, skb);
+    tcp_input_state(sk, th, skb, iph->saddr);
 
     socket_release(sk->sock);
 }
@@ -170,6 +173,83 @@ int tcp_v4_connect(struct sock *sk, const struct sockaddr *addr, socklen_t addrl
 int tcp_disconnect(struct sock *sk, int flags)
 {
     return 0;
+}
+
+int tcp_v4_bind(struct sock *sk, const struct sockaddr *addr, socklen_t addr_len)
+{
+    uint16_t sport = sockaddr_port(addr);
+    uint32_t saddr = sockaddr_addr(addr);
+
+    sk->sport = ntohs(sport);
+    sk->saddr = ntohl(saddr);
+
+    return 0;
+}
+
+int tcp_v4_listen(struct sock *sk, int n)
+{
+    int ret = 0;
+
+    switch (sk->state) {
+    case TCP_CLOSE:
+        tcp_set_state(sk, TCP_LISTEN);
+        break;
+    default:
+        ret = EOPNOTSUPP;
+        goto out;
+    }
+
+    // init half conn and conned queue
+    struct tcp_sock *tsk = tcp_sk(sk);
+    tsk->tcp_passive_conn_queue.max_conn = n;
+    conn_queue_init(&tsk->tcp_passive_conn_queue.establied_conn_queue);
+    wait_init(&tsk->tcp_passive_conn_queue.recv_wait);
+
+out:
+    return ret;
+}
+
+static inline int get_established_conn_fd(struct tcp_sock *tsk)
+{
+    struct conn_head *list = &tsk->tcp_passive_conn_queue.establied_conn_queue;
+    struct socket *sock = tsk->sk.sock;
+
+    for (;;) {
+        if (conn_queue_len(list) > 0) {
+            struct conn_info * conn_info = conn_dequeue(list);
+            return conn_info->sk->fd;
+        } else {
+            if (sock->flags & O_NONBLOCK) {
+                return -EAGAIN;
+            } else {
+                pthread_mutex_lock(&tsk->tcp_passive_conn_queue.recv_wait.lock);
+                socket_release(sock);
+                wait_sleep(&tsk->tcp_passive_conn_queue.recv_wait);
+                pthread_mutex_unlock(&tsk->tcp_passive_conn_queue.recv_wait.lock);
+                socket_wr_acquire(sock);
+            }
+        }
+    }
+
+    return -1;
+}
+
+int tcp_v4_accept(struct sock *sk, struct sockaddr *__restrict__ addr, socklen_t *__restrict__ addr_len)
+{
+    struct tcp_sock *tsk = tcp_sk(sk);
+
+    // 1. check sk state
+    if (sk->state != TCP_LISTEN) {
+        print_err("TCP synack: Socket was not in correct state (TCP_LISTEN)\n");
+        return -1;
+    }
+    // 2. wait, until new connect create
+    int fd = get_established_conn_fd(tsk);
+    struct socket *sock = get_socket(tsk->sk.sock->pid, fd);
+
+    build_sockaddr_from_host_order(sock->sk->dport, sock->sk->daddr, addr, addr_len);
+
+    return fd;
 }
 
 int tcp_write(struct sock *sk, const void *buf, int len)
@@ -277,6 +357,7 @@ int tcp_close(struct sock *sk)
         /* Queue this request until all preceding SENDs have been
            segmentized; then send a FIN segment, enter LAST_ACK state. */
         tcp_queue_fin(sk);
+        tcp_set_state(sk, TCP_LAST_ACK);
         break;
     default:
         print_err("Unknown TCP state for close\n");

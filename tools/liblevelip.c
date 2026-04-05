@@ -19,6 +19,8 @@ static int (*_getsockopt)(int fd, int level, int optname,
 static int (*_read)(int sockfd, void *buf, size_t len) = NULL;
 static int (*_write)(int sockfd, const void *buf, size_t len) = NULL;
 static int (*_connect)(int sockfd, const struct sockaddr *addr, socklen_t addrlen) = NULL;
+static int (*_listen)(int fd, int n);
+static int (*_accept)(int fd, struct sockaddr *__restrict__ addr, socklen_t *__restrict__ addr_len);
 static int (*_socket)(int domain, int type, int protocol) = NULL;
 static int (*_close)(int fildes) = NULL;
 static int (*_poll)(struct pollfd fds[], nfds_t nfds, int timeout) = NULL;
@@ -44,6 +46,7 @@ static int (*_getsockname)(int socket, struct sockaddr *restrict address,
                            socklen_t *restrict address_len) = NULL;
 
 static int lvlip_socks_count = 0;
+static pid_t main_pid = 0; // accept after fork, will cause pid change, write and read call will use false pid to find socket, record it.
 static LIST_HEAD(lvlip_socks);
 
 static inline struct lvlip_sock *lvlip_get_sock(int fd) {
@@ -198,7 +201,12 @@ int close(int fd)
 
     lvl_sock_dbg("Close called", sock);
     
-    int pid = getpid();
+    int pid = 0;
+    if (main_pid) {
+        pid = main_pid;
+    } else {
+        pid = getpid();
+    }
     int msglen = sizeof(struct ipc_msg) + sizeof(struct ipc_close);
     int rc = 0;
 
@@ -272,6 +280,105 @@ int bind(int sockfd, const struct sockaddr *addr,
     memcpy(msg->data, &payload, sizeof(struct ipc_bind));
 
     return transmit_lvlip(sock->lvlfd, msg, msglen);
+}
+
+int listen(int sockfd, int n)
+{
+    struct lvlip_sock *sock = lvlip_get_sock(sockfd);
+
+    if (sock == NULL) {
+        /* No lvl-ip IPC socket associated */
+        lvl_sock_dbg("No lvl-ip IPC socket associated", sock);
+        return _listen(sockfd, n);
+    }
+
+    lvl_sock_dbg("listen called", sock);
+    
+    int msglen = sizeof(struct ipc_msg) + sizeof(struct ipc_listen);
+    int pid = getpid();
+    
+    struct ipc_msg *msg = alloca(msglen);
+    msg->type = IPC_LISTEN;
+    msg->pid = pid;
+
+    struct ipc_listen payload = {
+        .sockfd = sockfd,
+        .n = n
+    };
+
+    memcpy(msg->data, &payload, sizeof(struct ipc_listen));
+
+    return transmit_lvlip(sock->lvlfd, msg, msglen);
+}
+
+int accept(int sockfd, struct sockaddr *__restrict__ addr, socklen_t *__restrict__ addr_len)
+{
+    struct lvlip_sock *sock = lvlip_get_sock(sockfd);
+
+    if (sock == NULL) {
+        /* No lvl-ip IPC socket associated */
+        return _accept(sockfd, addr, addr_len);
+    }
+
+    lvl_sock_dbg("accept called", sock);
+    
+    int msglen = sizeof(struct ipc_msg) + sizeof(struct ipc_accept);
+    int pid = getpid();
+    main_pid = pid;
+    
+    struct ipc_msg *msg = alloca(msglen);
+    msg->type = IPC_ACCEPT;
+    msg->pid = pid;
+
+    struct ipc_accept payload = {
+        .sockfd = sockfd,
+        .addr = *addr,
+        .addr_len = *addr_len
+    };
+
+    memcpy(msg->data, &payload, sizeof(struct ipc_listen));
+
+    // Send mocked syscall to lvl-ip
+    if (_write(sock->lvlfd, (char *)msg, msglen) == -1) {
+        perror("Error on writing IPC read");
+    }
+
+    int rlen = sizeof(struct ipc_msg) + sizeof(struct ipc_err) + sizeof(struct ipc_accept);
+    char rbuf[rlen];
+    memset(rbuf, 0, rlen);
+
+    // Read return value from lvl-ip
+    if (_read(sock->lvlfd, rbuf, rlen) == -1) {
+        perror("Could not read IPC read response");
+    }
+    
+    struct ipc_msg *response = (struct ipc_msg *) rbuf;
+
+    if (response->type != IPC_ACCEPT || response->pid != pid) {
+        print_err("ERR: IPC accept response expected: type %d, pid %d\n"
+                  "                       actual: type %d, pid %d\n",
+               IPC_ACCEPT, pid, response->type, response->pid);
+        return -1;
+    }
+
+    struct ipc_err *error = (struct ipc_err *) response->data;
+    if (error->rc < 0) {
+        errno = error->err;
+        return error->rc;
+    }
+
+    struct ipc_accept *data = (struct ipc_accept *) error->data;
+
+    memcpy(addr, &data->addr, sizeof(struct sockaddr));
+
+    int lvlfd = init_socket("/tmp/lvlip.socket");
+    sock = lvlip_alloc();
+    sock->lvlfd = lvlfd;
+    sock->fd = data->sockfd;
+    list_add_tail(&sock->list, &lvlip_socks);
+    lvlip_socks_count++;
+
+    return data->sockfd;
 }
 
 ssize_t send(int fd, const void *buf, size_t len, int flags)
@@ -401,7 +508,12 @@ ssize_t write(int sockfd, const void *buf, size_t len)
 
     lvl_sock_dbg("Write called", sock);
     int msglen = sizeof(struct ipc_msg) + sizeof(struct ipc_write) + len;
-    int pid = getpid();
+    int pid = 0;
+    if (main_pid) {
+        pid = main_pid;
+    } else {
+        pid = getpid();
+    }
 
     struct ipc_msg *msg = alloca(msglen);
     msg->type = IPC_WRITE;
@@ -429,7 +541,13 @@ ssize_t read(int sockfd, void *buf, size_t len)
 
     lvl_sock_dbg("Read called", sock);
 
-    int pid = getpid();
+    int pid = 0;
+    if (main_pid) {
+        pid = main_pid;
+    } else {
+        pid = getpid();
+    }
+
     int msglen = sizeof(struct ipc_msg) + sizeof(struct ipc_read);
 
     struct ipc_msg *msg = alloca(msglen);
@@ -903,6 +1021,8 @@ int __libc_start_main(int (*main) (int, char * *, char * *), int argc,
     __start_main = dlsym(RTLD_NEXT, "__libc_start_main");
 
     _bind = dlsym(RTLD_NEXT, "bind");
+    _listen = dlsym(RTLD_NEXT, "listen");
+    _accept = dlsym(RTLD_NEXT, "accept");
     _sendto = dlsym(RTLD_NEXT, "sendto");
     _recvfrom = dlsym(RTLD_NEXT, "recvfrom");
     _poll = dlsym(RTLD_NEXT, "poll");

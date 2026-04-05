@@ -2,23 +2,7 @@
 #include "ip.h"
 #include "udp.h"
 #include "list.h"
-
-void build_sockaddr_from_host_order(
-    uint16_t srcport,          // 网络字节序端口
-    uint32_t srcaddr,          // 网络字节序 IPv4 地址
-    struct sockaddr *addr,     // 输出：sockaddr 指针
-    socklen_t *addr_len              // 输出：地址结构长度指针
-) {
-    struct sockaddr_in *sin = (struct sockaddr_in *)addr;
-
-    memset(sin, 0, sizeof(*sin));
-
-    sin->sin_family = AF_INET;
-    sin->sin_port   = htons(srcport);          
-    sin->sin_addr.s_addr = htonl(srcaddr);      
-
-    *addr_len = sizeof(struct sockaddr_in);
-}
+#include "utils.h"
 
 int udp_data_dequeue(struct udp_sock *usk, void *user_buf, int userlen, struct sockaddr *addr, socklen_t *addr_len)
 {

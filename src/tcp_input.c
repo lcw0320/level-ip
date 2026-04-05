@@ -1,4 +1,5 @@
 #include "syshead.h"
+#include "tcp_passive_conn.h"
 #include "tcp.h"
 #include "tcp_data.h"
 #include "skbuff.h"
@@ -139,10 +140,57 @@ static inline int tcp_discard(struct tcp_sock *tsk, struct sk_buff *skb, struct 
     return 0;
 }
 
-static int tcp_listen(struct tcp_sock *tsk, struct sk_buff *skb, struct tcphdr *th)
+static inline struct tcp_sock * fork_socket(pid_t pid, struct sk_buff *skb, struct tcphdr *th, uint32_t saddr, uint16_t sport, uint32_t daddr)
 {
+    int fd = -1;
+    struct socket *sk = NULL;
+    struct tcp_sock *tsk = NULL;
+    struct tcb *tcb = NULL;
+
+    fd = _socket(pid, AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    sk = get_socket(pid, fd);
+    tcpsock_dbg("tcp listen recv syn, create a new socket", sk->sk);
+
+    // init tcb
+    tcp_set_state(sk->sk, TCP_SYN_RECEIVED);
+    tsk = tcp_sk(sk->sk);
+    tcb = &tsk->tcb;
+    tcb->iss = generate_iss();
+    tcb->rcv_nxt = th->seq + 1;
+    tcp_select_initial_window(&tcb->rcv_wnd);
+    tcb->irs = th->seq; // Q: what is irs
+    tcb->snd_una = tcb->iss;
+    tcb->snd_nxt = tcb->iss;
+    tcb->snd_wnd = 0;
+    tcb->snd_wl1 = 0;
+    tcb->snd_wl2 = 0;
+
+    sk->sk->saddr = saddr;
+    sk->sk->sport = sport;
+    sk->sk->dport = th->sport;
+    sk->sk->daddr = daddr;
+
+    return tsk;
+}
+
+static int tcp_listen(struct tcp_sock *tsk, struct sk_buff *skb, struct tcphdr *th, uint32_t saddr)
+{
+    int ret = 0;
+
+    if (th->syn) {       
+        // create new socket from now
+        struct tcp_sock *fork_tsk = fork_socket(tsk->sk.sock->pid, skb, th, tsk->sk.saddr, tsk->sk.sport, saddr);
+        
+        fork_tsk->ptsk = tsk;
+
+        // send syc-ack
+        ret = tcp_send_synack(&fork_tsk->sk);
+
+        fork_tsk->tcb.snd_nxt++;
+    }
+
     free_skb(skb);
-    return 0;
+    return ret;
 }
 
 static int tcp_synsent(struct tcp_sock *tsk, struct sk_buff *skb, struct tcphdr *th)
@@ -258,10 +306,20 @@ out:
     return rc;
 }
 
+static int add_tsk_to_parent_establied_conn_list(struct tcp_sock *tsk)
+{
+    struct conn_info* conn_info = calloc_conn();
+    conn_info->sk = tsk->sk.sock;
+    conn_queue_tail(&tsk->ptsk->tcp_passive_conn_queue.establied_conn_queue, conn_info);
+    wait_wakeup(&tsk->ptsk->tcp_passive_conn_queue.recv_wait);
+
+    return 0;
+}
+
 /*
  * Follows RFC793 "Segment Arrives" section closely
  */ 
-int tcp_input_state(struct sock *sk, struct tcphdr *th, struct sk_buff *skb)
+int tcp_input_state(struct sock *sk, struct tcphdr *th, struct sk_buff *skb, uint32_t saddr)
 {
     struct tcp_sock *tsk = tcp_sk(sk);
     struct tcb *tcb = &tsk->tcb;
@@ -272,7 +330,7 @@ int tcp_input_state(struct sock *sk, struct tcphdr *th, struct sk_buff *skb)
     case TCP_CLOSE:
         return tcp_closed(tsk, skb, th);
     case TCP_LISTEN:
-        return tcp_listen(tsk, skb, th);
+        return tcp_listen(tsk, skb, th, saddr);
     case TCP_SYN_SENT:
         return tcp_synsent(tsk, skb, th);
     }
@@ -285,7 +343,7 @@ int tcp_input_state(struct sock *sk, struct tcphdr *th, struct sk_buff *skb)
          * should be sent in reply (unless the RST bit is set, if so drop
          *  the segment and return): */
         if (!th->rst) {
-            tcp_send_ack(sk);
+           tcp_send_ack(sk); 
         }
         return_tcp_drop(sk, skb);
     }
@@ -316,8 +374,9 @@ int tcp_input_state(struct sock *sk, struct tcphdr *th, struct sk_buff *skb)
     // ACK bit is on
     switch (sk->state) {
     case TCP_SYN_RECEIVED:
-        if (tcb->snd_una <= th->ack_seq && th->ack_seq < tcb->snd_nxt) {
+        if (tcb->snd_una < th->ack_seq && th->ack_seq <= tcb->snd_nxt) {
             tcp_set_state(sk, TCP_ESTABLISHED);
+            add_tsk_to_parent_establied_conn_list(tsk);
         } else {
             return_tcp_drop(sk, skb);
         }

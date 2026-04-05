@@ -18,6 +18,8 @@ struct net_ops {
     int (*close) (struct sock *sk);
     int (*abort) (struct sock *sk);
     int (*bind)(struct sock *sk, const struct sockaddr *addr, socklen_t addr_len);
+    int (*listen)(struct sock *sk, int n);
+    int (*accept)(struct sock *sk, struct sockaddr *__restrict__ addr, socklen_t *__restrict__ addr_len);
     int (*send)(struct sock *sk, const void *buf, int len, int flags);
     int (*sendto)(struct sock *sock, const void *buf, int len, int flags,
                 const struct sockaddr *addr, socklen_t addr_len);
