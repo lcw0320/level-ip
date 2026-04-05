@@ -40,6 +40,8 @@ struct sock_type {
 struct sock_ops {
     int (*connect) (struct socket *sock, const struct sockaddr *addr,
                     int addr_len, int flags);
+    int (*listen)(struct socket *sock, int n);
+    int (*accept)(struct socket *sock, struct sockaddr *__restrict__ addr, socklen_t *__restrict__ addr_len);
     int (*write) (struct socket *sock, const void *buf, int len);
     int (*read) (struct socket *sock, void *buf, int len);
     int (*close) (struct socket *sock);
@@ -81,6 +83,8 @@ void *socket_ipc_open(void *args);
 int _socket(pid_t pid, int domain, int type, int protocol);
 int _connect(pid_t pid, int sockfd, const struct sockaddr *addr, socklen_t addrlen);
 int _bind(pid_t pid, int sockfd, const struct sockaddr *addr, socklen_t addrlen);
+int _listen(pid_t pid, int sockfd, int n);
+int _accept(pid_t pid, int sockfd, struct sockaddr *addr, socklen_t addrlen);
 int _sendto(pid_t pid, int sockfd, const void *buf, const unsigned int count, int flags, const struct sockaddr *addr, socklen_t addrlen);
 int _recvfrom(pid_t pid, int sockfd, void *buf, const unsigned int count, int flags, struct sockaddr *restrict address, socklen_t *restrict addrlen);
 int _write(pid_t pid, int sockfd, const void *buf, const unsigned int count);
@@ -94,7 +98,7 @@ int _getpeername(pid_t pid, int socket, struct sockaddr *restrict address,
 int _getsockname(pid_t pid, int socket, struct sockaddr *restrict address,
                  socklen_t *restrict address_len);
 
-struct socket *socket_lookup(uint16_t sport, uint16_t dport);
+struct socket *socket_lookup(uint32_t saddr, uint32_t daddr, uint16_t sport, uint16_t dport);
 struct socket *socket_find(struct socket *sock);
 struct socket *socker_find_protocol_port(uint16_t port, int protocol);
 int socket_rd_acquire(struct socket *sock);
@@ -104,5 +108,6 @@ int socket_free(struct socket *sock);
 int socket_delete(struct socket *sock);
 void abort_sockets();
 void socket_debug();
+struct socket *get_socket(pid_t pid, uint32_t fd);
 
 #endif

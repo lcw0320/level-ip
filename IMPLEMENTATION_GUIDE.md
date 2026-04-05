@@ -1156,7 +1156,7 @@ echo "hello" | nc 10.0.0.4 8080
 ```bash
 # 同时发起多个连接
 for i in {1..10}; do
-    (echo "client $i" | nc 10.0.0.4 8080) &
+    (echo "client $i" | nc 10.0.0.4 8081) &
 done
 wait
 ```

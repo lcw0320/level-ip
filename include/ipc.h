@@ -29,6 +29,8 @@ void *start_ipc_listener();
 #define IPC_BIND        0x000C
 #define IPC_SENDTO      0x000D
 #define IPC_RECVFROM    0x000E
+#define IPC_LISTEN      0x000F
+#define IPC_ACCEPT      0x0010
 
 struct ipc_thread {
     struct list_head list;
@@ -64,6 +66,17 @@ struct ipc_bind {
     int sockfd;
     struct sockaddr addr;
     socklen_t addrlen;
+} __attribute__((packed));
+
+struct ipc_listen {
+    int sockfd;
+    int n;
+} __attribute__((packed));
+
+struct ipc_accept {
+    int sockfd;
+    struct sockaddr addr;
+    socklen_t addr_len;
 } __attribute__((packed));
 
 struct ipc_sendto {

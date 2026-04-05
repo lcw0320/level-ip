@@ -6,3 +6,18 @@ prog="$1"
 shift
 
 LD_PRELOAD="$(dirname $0)/liblevelip.so" "$prog" "$@"
+
+# #!/bin/sh
+
+# set -eu
+
+# prog="$1"
+# shift
+
+# # 获取库的绝对路径
+# lib_path="$(dirname "$0")/liblevelip.so"
+
+# # 启动 gdb
+# gdb -ex "set exec-wrapper env LD_PRELOAD=$lib_path" \
+#     -ex "run" \
+#     --args "$prog" "$@"

@@ -157,8 +157,8 @@ static int tcp_queue_transmit_skb(struct sock *sk, struct sk_buff *skb)
 
 int tcp_send_synack(struct sock *sk)
 {
-    if (sk->state != TCP_SYN_SENT) {
-        print_err("TCP synack: Socket was not in correct state (SYN_SENT)\n");
+    if (sk->state != TCP_SYN_SENT && sk->state != TCP_SYN_RECEIVED) {
+        print_err("TCP synack: Socket was not in correct state (SYN_SENT) (TCP_SYN_RECEIVED)\n");
         return 1;
     }
 
@@ -174,6 +174,8 @@ int tcp_send_synack(struct sock *sk)
     th->ack = 1;
 
     rc = tcp_transmit_skb(sk, skb, tcb->snd_nxt);
+    
+
     free_skb(skb);
 
     return rc;

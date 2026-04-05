@@ -1,6 +1,7 @@
 #ifndef TCP_H_
 #define TCP_H_
 #include "syshead.h"
+#include "tcp_passive_conn.h"
 #include "ip.h"
 #include "timer.h"
 #include "utils.h"
@@ -191,8 +192,16 @@ struct tcp_sack_block {
     uint32_t right;
 } __attribute__((packed));
 
+struct tcp_passive_conn
+{
+    struct conn_head establied_conn_queue;
+    struct wait_lock recv_wait;
+    uint32_t max_conn;
+};
+
 struct tcp_sock {
     struct sock sk;
+    struct tcp_sock* ptsk;
     int fd;
     uint16_t tcp_header_len;
     struct tcb tcb;
@@ -219,6 +228,7 @@ struct tcp_sock {
     uint8_t tsopt;
     
     struct sk_buff_head ofo_queue; /* Out-of-order queue */
+    struct tcp_passive_conn tcp_passive_conn_queue;
 };
 
 static inline struct tcphdr *tcp_hdr(const struct sk_buff *skb)
@@ -238,12 +248,15 @@ int tcp_init_sock(struct sock *sk);
 void __tcp_set_state(struct sock *sk, uint32_t state);
 int tcp_v4_checksum(struct sk_buff *skb, uint32_t saddr, uint32_t daddr);
 int tcp_v4_connect(struct sock *sk, const struct sockaddr *addr, socklen_t addrlen, int flags);
+int tcp_v4_bind(struct sock *sk, const struct sockaddr *addr, socklen_t addr_len);
+int tcp_v4_listen(struct sock *sk, int n);
+int tcp_v4_accept(struct sock *sk, struct sockaddr *__restrict__ addr, socklen_t *__restrict__ addr_len);
 int tcp_connect(struct sock *sk);
 int tcp_disconnect(struct sock *sk, int flags);
 int tcp_write(struct sock *sk, const void *buf, int len);
 int tcp_read(struct sock *sk, void *buf, int len);
 int tcp_receive(struct tcp_sock *tsk, void *buf, int len);
-int tcp_input_state(struct sock *sk, struct tcphdr *th, struct sk_buff *skb);
+int tcp_input_state(struct sock *sk, struct tcphdr *th, struct sk_buff *skb, uint32_t saddr);
 int tcp_send_synack(struct sock *sk);
 int tcp_send_next(struct sock *sk, int amount);
 int tcp_send_ack(struct sock *sk);

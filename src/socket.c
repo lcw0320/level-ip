@@ -1,4 +1,5 @@
 #include "syshead.h"
+#include "tcp.h"
 #include "utils.h"
 #include "socket.h"
 #include "inet.h"
@@ -120,7 +121,7 @@ void abort_sockets() {
     }
 }
 
-static struct socket *get_socket(pid_t pid, uint32_t fd)
+struct socket *get_socket(pid_t pid, uint32_t fd)
 {
     struct list_head *item;
     struct socket *sock = NULL;
@@ -138,7 +139,7 @@ out:
     return sock;
 }
 
-struct socket *socket_lookup(uint16_t remoteport, uint16_t localport)
+struct socket *socket_lookup(uint32_t remotesaddr, uint32_t localsaddr, uint16_t remoteport, uint16_t localport)
 {
     struct list_head *item;
     struct socket *sock = NULL;
@@ -152,13 +153,44 @@ struct socket *socket_lookup(uint16_t remoteport, uint16_t localport)
         if (sock == NULL || sock->sk == NULL) continue;
         sk = sock->sk;
 
-        print_debug("socket_lookup socket sport: %u, socket dport: %u, socket protocol: %u, remoteport: %u, localport: %u\n",
-           ntohs(sk->sport), ntohs(sk->dport), sk->protocol, ntohs(remoteport), ntohs(localport));
-        if (sk->sport == localport && sk->dport == remoteport) {
-            goto found;
-        } else if (sk->protocol == IPPROTO_UDP && sk->sport == localport) {
-            // UDP only need to match dest port
-            goto found;
+        print_debug("find no listen socket socket, daddr: %d.%d.%d.%d, socket sport: %u, socket dport: %u, socket protocol: %u, remotesaddr: %d.%d.%d.%d, remoteport: %u, localport: %u\n",
+           (sk->daddr >> 24) & 0xFF, (sk->daddr >> 16) & 0xFF, (sk->daddr >> 8) & 0xFF, sk->daddr & 0xFF,
+           sk->sport, sk->dport, sk->protocol,
+           (remotesaddr >> 24) & 0xFF, (remotesaddr >> 16) & 0xFF, (remotesaddr >> 8) & 0xFF, remotesaddr & 0xFF,
+           remoteport, localport);
+        switch (sk->protocol) {
+        case IPPROTO_TCP:
+            // tcp socket need to find from established or half conn list first, then find from listen state
+            if ((sk->state != TCP_LISTEN) && (sk->sport == localport && sk->dport == remoteport && sk->daddr == remotesaddr && sk->saddr == localsaddr)) {
+                goto found;
+            }
+            break;
+        case IPPROTO_UDP:
+            if (sk->sport == localport) {
+                goto found;
+            }
+            break;
+        default:
+            break;
+        }
+    }
+
+    list_for_each(item, &sockets) {
+        sock = list_entry(item, struct socket, list);
+
+        if (sock == NULL || sock->sk == NULL) continue;
+        sk = sock->sk;
+
+        print_debug("find from listen socket, socket sport: %u, socket dport: %u, socket protocol: %u, remoteport: %u, localport: %u\n",
+           sk->sport, sk->dport, sk->protocol, remoteport, localport);
+        switch (sk->protocol) {
+        case IPPROTO_TCP:
+            if (sk->state == TCP_LISTEN && (sk->sport == localport) && (sk->saddr == localsaddr)) {
+                goto found;
+            }
+            break;
+        default:
+            break;
         }
     }
 
@@ -313,8 +345,42 @@ int _bind(pid_t pid, int sockfd, const struct sockaddr *addr, socklen_t addrlen)
         return -EBADF;
     }
 
+    // todo: check whether port is used
+
     socket_wr_acquire(sock);
     int rc = sock->ops->bind(sock, addr, addrlen);
+    socket_release(sock);
+
+    return rc;
+}
+
+int _listen(pid_t pid, int sockfd, int n)
+{
+    struct socket *sock;
+
+    if ((sock = get_socket(pid, sockfd)) == NULL) {
+        print_err("Connect: could not find socket (fd %u) for connection (pid %d)\n", sockfd, pid);
+        return -EBADF;
+    }
+
+    socket_wr_acquire(sock);
+    int rc = sock->ops->listen(sock, n);
+    socket_release(sock);
+
+    return rc;
+}
+
+int _accept(pid_t pid, int sockfd, struct sockaddr *addr, socklen_t addrlen)
+{
+    struct socket *sock;
+
+    if ((sock = get_socket(pid, sockfd)) == NULL) {
+        print_err("Connect: could not find socket (fd %u) for connection (pid %d)\n", sockfd, pid);
+        return -EBADF;
+    }
+
+    socket_wr_acquire(sock);
+    int rc = sock->ops->accept(sock, addr, &addrlen);
     socket_release(sock);
 
     return rc;
