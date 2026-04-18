@@ -29,6 +29,9 @@
 #define TCP_OPT_SACK 5
 #define TCP_OPTLEN_SACK 2
 #define TCP_OPT_TS 8
+#define TCP_OPTLEN_TS 10
+#define TCP_OPTLEN_WSO 3
+#define TCP_OPT_WSO 3
 
 #define TCP_2MSL 60000
 #define TCP_USER_TIMEOUT 180000
@@ -134,6 +137,12 @@ struct tcp_opt_mss {
     uint16_t mss;
 } __attribute__((packed));
 
+struct tcp_opt_wso {
+    uint8_t kind;
+    uint8_t len;
+    uint8_t wso;
+} __attribute__((packed));
+
 struct tcpiphdr {
     uint32_t saddr;
     uint32_t daddr;
@@ -183,6 +192,7 @@ struct tcb {
     uint32_t rcv_nxt; /* next sequence number expected on an incoming segments, and
                          is the left or lower edge of the receive window */
     uint32_t rcv_wnd;
+    uint32_t real_rcv_wnd;
     uint32_t rcv_up;
     uint32_t irs;
 };
@@ -224,6 +234,12 @@ struct tcp_sock {
     uint8_t sacks_allowed;
     uint8_t sacklen;
     struct tcp_sack_block sacks[4];
+
+    // === 新增的窗口移位计数器 (Window Shift Counters) ===
+    // 对应 RFC 1323 描述的 Snd.Wind.Shift 和 Rcv.Wind.Shift
+    uint8_t snd_scale; // 发送窗口缩放因子（应用于 outgoing window）
+    uint8_t wso_allowed;
+    uint8_t rcv_scale; // 接收窗口缩放因子（应用于 incoming window）
 
     uint8_t tsopt;
     

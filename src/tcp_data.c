@@ -46,6 +46,12 @@ static void tcp_consume_ofo_queue(struct tcp_sock *tsk)
     }
 }
 
+static void increase_recv_win(struct tcp_sock *tsk, int dlen)
+{
+    tsk->tcb.real_rcv_wnd += dlen;
+    return;
+}
+
 int tcp_data_dequeue(struct tcp_sock *tsk, void *user_buf, int userlen)
 {
     struct sock *sk = &tsk->sk;
@@ -67,6 +73,8 @@ int tcp_data_dequeue(struct tcp_sock *tsk, void *user_buf, int userlen)
         skb->payload += dlen;
         rlen += dlen;
         user_buf += dlen;
+        
+        increase_recv_win(tsk, dlen);
 
         /* skb is fully eaten, process flags and drop it */
         if (skb->dlen == 0) {
@@ -84,6 +92,12 @@ int tcp_data_dequeue(struct tcp_sock *tsk, void *user_buf, int userlen)
     return rlen;
 }
 
+static void decrease_recv_win(struct tcp_sock *tsk, int dlen)
+{
+    tsk->tcb.real_rcv_wnd -= dlen;
+    return;
+}
+
 int tcp_data_queue(struct tcp_sock *tsk, struct tcphdr *th, struct sk_buff *skb)
 {
     struct sock *sk = &tsk->sk;
@@ -97,6 +111,7 @@ int tcp_data_queue(struct tcp_sock *tsk, struct tcphdr *th, struct sk_buff *skb)
 
     int expected = skb->seq == tcb->rcv_nxt;
     if (expected) {
+        decrease_recv_win(tsk, skb->dlen);
         tcb->rcv_nxt += skb->dlen;
 
         skb->refcnt++;
