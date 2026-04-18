@@ -69,27 +69,42 @@ void print_sockaddr(const struct sockaddr *addr, socklen_t addrlen)
 
 int echo_task(int fd)
 {
-    char buf[1024] = {};
-    size_t readSize = 0;
+    char buf[4096]; // 增大一点缓冲区，减少系统调用次数
+    ssize_t readSize; // 注意用 ssize_t
+    ssize_t writeSize;
+
+    // 建议：关闭 stdout 缓冲，防止日志堵塞
+    setvbuf(stdout, NULL, _IONBF, 0);
 
     printf("start echo task fd: %d\n", fd);
+    
     while((readSize = read(fd, buf, sizeof(buf))) > 0) {
-        printf("recv: %s, size: %ld\n", buf, readSize);
-        if (write(fd, buf, readSize) < 0) {
-            printf("write error: %s\n", strerror(errno));
-            close(fd);
-            return -1;
+        // 不要打印 buf 的内容，因为 urandom 是乱码，打印出来会刷屏且极慢
+        printf("recv size: %ld\n", readSize); 
+        
+        // 必须确保 write 写入了所有读取到的字节
+        size_t bytes_to_write = readSize;
+        size_t bytes_written = 0;
+        
+        while (bytes_written < bytes_to_write) {
+            writeSize = write(fd, buf + bytes_written, bytes_to_write - bytes_written);
+            if (writeSize < 0) {
+                perror("write error");
+                close(fd);
+                return -1;
+            }
+            bytes_written += writeSize;
         }
     }
 
-    while (readSize < 0) {
-        printf("read error %s\n", strerror(errno));
-        return -1;
+    if (readSize < 0) {
+        perror("read error");
+    } else {
+        printf("client disconnected, echo finished.\n");
     }
 
     close(fd);
-    exit(EXIT_SUCCESS);
-    return 0;
+    exit(EXIT_SUCCESS); 
 }
 
 int main(int argc, char **argv)
@@ -139,7 +154,7 @@ int main(int argc, char **argv)
             break;
         }
 
-        if (pid = fork() > 0) {
+        if ((pid = fork()) > 0) {
             print_sockaddr(&acceptaddr, addrlen);
         } else if (pid == 0) {
             echo_task(acceptFd);

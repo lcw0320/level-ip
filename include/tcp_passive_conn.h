@@ -15,7 +15,7 @@ struct conn_head {
 
 static inline struct conn_info* calloc_conn()
 {
-    return calloc(0, sizeof(struct conn_info));
+    return calloc(1, sizeof(struct conn_info));
 }
 
 static inline void free_conn(struct conn_info *conn)

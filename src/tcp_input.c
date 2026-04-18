@@ -9,19 +9,20 @@ static int tcp_parse_opts(struct tcp_sock *tsk, struct tcphdr *th)
 {
     uint8_t *ptr = th->data;
     uint8_t optlen = tcp_hlen(th) - 20;
-    struct tcp_opt_mss *opt_mss = NULL;
+    // struct tcp_opt_mss *opt_mss = NULL;
+    struct tcp_opt_wso *opt_wso = NULL;
     uint8_t sack_seen = 0;
     uint8_t tsopt_seen = 0;
     
-    while (optlen > 0 && optlen < 20) {
+    while (optlen > 0 && optlen < 30) {
         switch (*ptr) {
         case TCP_OPT_MSS:
-            opt_mss = (struct tcp_opt_mss *)ptr;
-            uint16_t mss = ntohs(opt_mss->mss);
+            // opt_mss = (struct tcp_opt_mss *)ptr;
+            // uint16_t mss = ntohs(opt_mss->mss);
 
-            if (mss > 536 && mss <= 1460) {
-                tsk->smss = mss;
-            }
+            // if (mss > 536 && mss <= 1460) {
+            //     tsk->smss = mss;
+            // }
 
             ptr += sizeof(struct tcp_opt_mss);
             optlen -= 4;
@@ -31,12 +32,27 @@ static int tcp_parse_opts(struct tcp_sock *tsk, struct tcphdr *th)
             optlen--;
             break;
         case TCP_OPT_SACK_OK:
-            sack_seen = 1;
-            optlen--;
+            ptr += TCP_OPTLEN_SACK;
+            // sack_seen = 1;
+            optlen -= TCP_OPTLEN_SACK;
             break;
         case TCP_OPT_TS:
-            tsopt_seen = 1;
-            optlen--;
+            ptr += TCP_OPTLEN_TS;
+            // tsopt_seen = 1;
+            optlen -= TCP_OPTLEN_TS;
+            break;
+        case TCP_OPT_WSO:
+            opt_wso = (struct tcp_opt_wso *)ptr;
+            uint8_t wso = opt_wso->wso;
+            
+            if (wso <= 14) {
+                tsk->snd_scale = wso;
+            } else {
+                tsk->snd_scale = 14;
+            }
+
+            ptr += sizeof(struct tcp_opt_wso);
+            optlen -= TCP_OPTLEN_WSO;
             break;
         default:
             print_err("Unrecognized TCPOPT\n");
@@ -154,14 +170,23 @@ static inline struct tcp_sock * fork_socket(pid_t pid, struct sk_buff *skb, stru
     // init tcb
     tcp_set_state(sk->sk, TCP_SYN_RECEIVED);
     tsk = tcp_sk(sk->sk);
+
+    tcp_parse_opts(tsk, th);
+    if (tsk->snd_scale) {
+        tsk->wso_allowed = 1;
+        tsk->rcv_scale = tsk->snd_scale;
+    }
+
     tcb = &tsk->tcb;
     tcb->iss = generate_iss();
     tcb->rcv_nxt = th->seq + 1;
     tcp_select_initial_window(&tcb->rcv_wnd);
+    tcb->rcv_wnd = tcb->rcv_wnd;
+    tcb->real_rcv_wnd = tcb->rcv_wnd;
     tcb->irs = th->seq; // Q: what is irs
     tcb->snd_una = tcb->iss;
     tcb->snd_nxt = tcb->iss;
-    tcb->snd_wnd = 0;
+    tcb->snd_wnd = th->win;
     tcb->snd_wl1 = 0;
     tcb->snd_wl2 = 0;
 
@@ -177,7 +202,7 @@ static int tcp_listen(struct tcp_sock *tsk, struct sk_buff *skb, struct tcphdr *
 {
     int ret = 0;
 
-    if (th->syn) {       
+    if (th->syn) {      
         // create new socket from now
         struct tcp_sock *fork_tsk = fork_socket(tsk->sk.sock->pid, skb, th, tsk->sk.saddr, tsk->sk.sport, saddr);
         
@@ -316,6 +341,11 @@ static int add_tsk_to_parent_establied_conn_list(struct tcp_sock *tsk)
     return 0;
 }
 
+static void update_snd_win(struct tcp_sock *tsk, uint16_t win)
+{
+    tsk->tcb.snd_wnd = win << tsk->snd_scale;
+}
+
 /*
  * Follows RFC793 "Segment Arrives" section closely
  */ 
@@ -409,7 +439,8 @@ int tcp_input_state(struct sock *sk, struct tcphdr *th, struct sk_buff *skb, uin
         }
 
         if (tcb->snd_una < th->ack_seq && th->ack_seq <= tcb->snd_nxt) {
-            // TODO: Send window should be updated
+            // TODO: should deal with zero window
+            update_snd_win(tsk, th->win);
         }
 
         break;

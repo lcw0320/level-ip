@@ -66,6 +66,17 @@ static int tcp_write_options(struct tcp_sock *tsk, struct tcphdr *th)
 {
     uint8_t *ptr = th->data;
 
+    if (!tsk->wso_allowed) return 0;
+
+    // if syn send windows scale, 
+    *ptr++ = TCP_OPT_NOOP;
+    struct tcp_opt_wso *wso = (struct tcp_opt_wso *)ptr;
+    wso->kind = TCP_OPT_WSO;
+    wso->len = TCP_OPTLEN_WSO;
+    wso->wso = tsk->rcv_scale;
+    return 0;
+
+    // todo: should add sack options also
     if (!tsk->sackok || tsk->sacks[0].left == 0) return 0;
 
     *ptr++ = TCP_OPT_NOOP;
@@ -106,7 +117,13 @@ static int tcp_transmit_skb(struct sock *sk, struct sk_buff *skb, uint32_t seq)
     thdr->seq = seq;
     thdr->ack_seq = tcb->rcv_nxt;
     thdr->rsvd = 0;
-    thdr->win = tcb->rcv_wnd;
+    /* RFC 7323 2.4 The receiver MUST honor, as in window, any segment that would
+     * have been in window for any <ACK> sent by the receiver.
+     */
+    thdr->win = tcb->real_rcv_wnd;
+    if (!thdr->syn) {
+        thdr->win = thdr->win >> tsk->rcv_scale;
+    } 
     thdr->csum = 0;
     thdr->urp = 0;
 
@@ -139,7 +156,7 @@ static int tcp_queue_transmit_skb(struct sock *sk, struct sk_buff *skb)
         tcp_rearm_rto_timer(tsk);
     }
 
-    if (tsk->inflight == 0) {
+    if (tsk->inflight <= 0) {
         /* Store sequence information into the socket buffer */
         rc = tcp_transmit_skb(sk, skb, tcb->snd_nxt);
         tsk->inflight++;
@@ -166,18 +183,22 @@ int tcp_send_synack(struct sock *sk)
     struct tcphdr *th;
     struct tcb * tcb = &tcp_sk(sk)->tcb;
     int rc = 0;
+    // todo: set correct hl, now only send window scale
+    int hl = 6; 
 
-    skb = tcp_alloc_skb(0, 0);
+    skb = tcp_alloc_skb((hl - 5) << 2, 0);
     th = tcp_hdr(skb);
 
     th->syn = 1;
     th->ack = 1;
-
+    th->hl = 6;
+    
+    // todo: need retransmit
     rc = tcp_transmit_skb(sk, skb, tcb->snd_nxt);
     
 
     free_skb(skb);
-
+    
     return rc;
 }
 
@@ -376,6 +397,8 @@ static void *tcp_retransmission_timeout(void *arg)
         tcp_notify_user(sk);
         goto unlock;
     }
+
+    /* todo: should deal with zero window */
 
     struct tcphdr *th = tcp_hdr(skb);
     skb_reset_header(skb);
