@@ -166,6 +166,15 @@ static int tcp_queue_transmit_skb(struct sock *sk, struct sk_buff *skb)
 
         if (th->fin) tcb->snd_nxt++;
     }
+    
+    // TODO: don't according queue size, instead of buffer size, use function
+    if (sk->write_queue.qlen >= sk->write_queue.max_q) {
+        pthread_mutex_lock(&sk->write_wait.lock);
+        socket_release(sk->sock);
+        wait_sleep(&sk->write_wait);
+        pthread_mutex_unlock(&sk->write_wait.lock);
+        socket_wr_acquire(sk->sock);
+    }
 
     skb_queue_tail(&sk->write_queue, skb);
 

@@ -44,6 +44,20 @@ static struct timer *timer_alloc()
     return t;
 }
 
+static int create_detach_thread(void *(*start_routine)(void *), void *__restrict__ arg)
+{
+    pthread_t th;
+
+    if (pthread_create(&th, NULL, start_routine, arg) != 0) {
+        print_err("Failed to create handler thread\n");
+        return -1;
+    } else {
+        pthread_detach(th);
+    }
+
+    return 0;
+}
+
 static void timers_tick()
 {
     struct list_head *item, *tmp = NULL;
@@ -69,9 +83,11 @@ static void timers_tick()
         }
 
         if (!t->cancelled && t->expires < tick) {
-            t->cancelled = 1;
-            pthread_t th;
-            pthread_create(&th, NULL, t->handler, t->arg);
+            if (create_detach_thread(t->handler, t->arg) < 0) {
+                continue;
+            } else {
+                t->cancelled = 1;
+            }
         }
 
         if (t->cancelled && t->refcnt == 0) {
