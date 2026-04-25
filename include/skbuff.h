@@ -4,7 +4,10 @@
 #include "netdev.h"
 #include "route.h"
 #include "list.h"
+#include "wait.h"
 #include <pthread.h>
+
+#define MAX_QUEUE 100
 
 struct sk_buff {
     struct list_head list;
@@ -24,7 +27,8 @@ struct sk_buff {
 
 struct sk_buff_head {
     struct list_head head;
-
+    
+    uint32_t max_q;
     uint32_t qlen;
 };
 
@@ -43,6 +47,7 @@ static inline uint32_t skb_queue_len(const struct sk_buff_head *list)
 static inline void skb_queue_init(struct sk_buff_head *list)
 {
     list_init(&list->head);
+    list->max_q = MAX_QUEUE;
     list->qlen = 0;
 }
 

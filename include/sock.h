@@ -33,6 +33,7 @@ struct sock {
     struct socket *sock;
     struct net_ops *ops;
     struct wait_lock recv_wait;
+    struct wait_lock write_wait;
     struct sk_buff_head receive_queue;
     struct sk_buff_head write_queue;
     int protocol;

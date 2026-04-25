@@ -90,6 +90,7 @@ static int tcp_clean_rto_queue(struct sock *sk, uint32_t una)
         if (skb->seq > 0 && skb->end_seq <= una) {
             /* skb fully acknowledged */
             skb_dequeue(&sk->write_queue);
+            wait_wakeup(&sk->write_wait);
             skb->refcnt--;
             free_skb(skb);
             if (tsk->inflight > 0) {
