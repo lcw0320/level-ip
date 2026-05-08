@@ -75,7 +75,7 @@ uint16_t calcuate_udp_checksum(uint32_t saddr, uint32_t daddr, struct udphdr *uh
 {
     // 假设最大 UDP 包不超过 1500 字节（常见 MTU）
     #define MAX_UDP_BUF (sizeof(struct udp_pseudo_hdr) + 1500)
-    static uint8_t buf[MAX_UDP_BUF];  // 或用 alloca，但注意栈大小
+    uint8_t buf[MAX_UDP_BUF];  // 或用 alloca，但注意栈大小
 
     struct udp_pseudo_hdr pseudo = {
         .src_ip = saddr,
@@ -208,7 +208,7 @@ int udp_bind(struct sock *sk, const struct sockaddr *addr, socklen_t addr_len)
     saddr = ntohl(saddr);
 
     if (socker_find_protocol_port(sport, IPPROTO_UDP)) {
-        ret = EADDRINUSE;
+        ret = -EADDRINUSE;
         return ret;
     }
     usk->sk.sport = sport;

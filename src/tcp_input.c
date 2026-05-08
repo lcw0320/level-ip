@@ -182,7 +182,6 @@ static inline struct tcp_sock * fork_socket(pid_t pid, struct sk_buff *skb, stru
     tcb->iss = generate_iss();
     tcb->rcv_nxt = th->seq + 1;
     tcp_select_initial_window(&tcb->rcv_wnd);
-    tcb->rcv_wnd = tcb->rcv_wnd;
     tcb->real_rcv_wnd = tcb->rcv_wnd;
     tcb->irs = th->seq; // Q: what is irs
     tcb->snd_una = tcb->iss;

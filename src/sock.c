@@ -18,7 +18,7 @@ void sock_init_data(struct socket *sock, struct sock *sk)
     sock->sk = sk;
     sk->sock = sock;
 
-    wait_init(&sk->recv_wait);
+    wait_init(&sk->write_wait);
     wait_init(&sk->recv_wait);
     skb_queue_init(&sk->receive_queue);
     skb_queue_init(&sk->write_queue);
