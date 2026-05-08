@@ -227,8 +227,11 @@ struct tcp_sock {
     uint8_t delacks;
     uint16_t rmss;
     uint16_t smss;
-    uint16_t cwnd;
-    uint32_t inflight;
+    /* RFC 5681 拥塞控制状态，单位都是字节 */
+    uint32_t cwnd;
+    uint32_t ssthresh;
+    uint32_t inflight;       /* FlightSize：已发送未 ACK 的字节数 */
+    uint32_t bytes_acked;    /* 拥塞避免阶段累计被 ACK 的字节数 */
 
     uint8_t sackok;
     uint8_t sacks_allowed;

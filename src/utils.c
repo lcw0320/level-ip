@@ -118,3 +118,7 @@ uint32_t parse_ipv4_string(char* addr) {
 uint32_t min(uint32_t x, uint32_t y) {
     return x > y ? y : x;
 }
+
+uint32_t max(uint32_t x, uint32_t y) {
+    return x > y ? x : y;
+}

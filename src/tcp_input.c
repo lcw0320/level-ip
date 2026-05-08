@@ -77,25 +77,54 @@ static int tcp_parse_opts(struct tcp_sock *tsk, struct tcphdr *th)
 }
 
 /*
+ * RFC 5681 §3.1：根据被 ACK 的字节数增长 cwnd。
+ * cwnd < ssthresh 时走慢启动（每 ACK 增 min(N, SMSS)）；
+ * 否则走拥塞避免（每累计 cwnd 字节增一个 SMSS）。
+ */
+static void tcp_cong_avoid(struct tcp_sock *tsk, uint32_t acked)
+{
+    if (acked == 0) {
+        return;
+    }
+
+    if (tsk->cwnd < tsk->ssthresh) {
+        tsk->cwnd += min(acked, tsk->smss);
+    } else {
+        tsk->bytes_acked += acked;
+        if (tsk->bytes_acked >= tsk->cwnd) {
+            tsk->bytes_acked -= tsk->cwnd;
+            tsk->cwnd += tsk->smss;
+        }
+    }
+}
+
+/*
  * Acks all segments from retransmissionn queue that are "older"
  * than current unacknowledged sequence
- */ 
+ */
 static int tcp_clean_rto_queue(struct sock *sk, uint32_t una)
 {
     struct tcp_sock *tsk = tcp_sk(sk);
     struct sk_buff *skb;
+    uint32_t acked = 0;
     int rc = 0;
-    
+
     while ((skb = skb_peek(&sk->write_queue)) != NULL) {
         if (skb->seq > 0 && skb->end_seq <= una) {
             /* skb fully acknowledged */
+            acked = skb->dlen;
             skb_dequeue(&sk->write_queue);
             wait_wakeup(&sk->write_wait);
             skb->refcnt--;
             free_skb(skb);
-            if (tsk->inflight > 0) {
-                tsk->inflight--;
+
+            if (tsk->inflight >= acked) {
+                tsk->inflight -= acked;
+            } else {
+                tsk->inflight = 0;
             }
+
+            tcp_cong_avoid(tsk, acked);
         } else {
             break;
         }
@@ -564,14 +593,14 @@ int tcp_input_state(struct sock *sk, struct tcphdr *th, struct sk_buff *skb, uin
         if (expected) {
             tcp_stop_delack_timer(tsk);
 
-            int pending = min(skb_queue_len(&sk->write_queue), 3);
+            int pending = skb_queue_len(&sk->write_queue);
             /* RFC1122:  A TCP SHOULD implement a delayed ACK, but an ACK should not
              * be excessively delayed; in particular, the delay MUST be less than
-             * 0.5 seconds, and in a stream of full-sized segments there SHOULD 
+             * 0.5 seconds, and in a stream of full-sized segments there SHOULD
              * be an ACK for at least every second segment. */
-            if (tsk->inflight == 0 && pending > 0) {
+            if (pending > 0) {
+                /* cwnd/rwnd 已在 tcp_send_next 内部判断，发多少由它决定 */
                 tcp_send_next(sk, pending);
-                tsk->inflight += pending;
                 tcp_rearm_rto_timer(tsk);
             } else if (th->psh || (skb->dlen > 1000 && ++tsk->delacks > 1)) {
                 tsk->delacks = 0;
