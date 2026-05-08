@@ -34,12 +34,6 @@ static inline void conn_queue_init(struct conn_head *list)
     list->qlen = 0;
 }
 
-static inline void conn_queue_add(struct conn_head *list, struct conn_info *new, struct conn_info *next)
-{
-    list_add_tail(&new->list, &next->list);
-    list->qlen += 1;
-}
-
 static inline void conn_queue_tail(struct conn_head *list, struct conn_info *new)
 {
     list_add_tail(&new->list, &list->head);
