@@ -150,21 +150,25 @@ static int tcp_queue_transmit_skb(struct sock *sk, struct sk_buff *skb)
     struct tcp_sock *tsk = tcp_sk(sk);
     struct tcb *tcb = &tsk->tcb;
     struct tcphdr * th = tcp_hdr(skb);
+    uint32_t snd_wnd = 0;
     int rc = 0;
-    
+
     if (skb_queue_empty(&sk->write_queue)) {
         tcp_rearm_rto_timer(tsk);
     }
 
-    if (tsk->inflight <= 0) {
-        /* Store sequence information into the socket buffer */
+    /* RFC 5681：FlightSize 不能超过 min(cwnd, rwnd)，否则只入队等 ACK 释放窗口 */
+    snd_wnd = min(tsk->cwnd, tcb->snd_wnd);
+    if (tsk->inflight + skb->dlen <= snd_wnd) {
         rc = tcp_transmit_skb(sk, skb, tcb->snd_nxt);
-        tsk->inflight++;
+        tsk->inflight += skb->dlen;
         skb->seq = tcb->snd_nxt;
         tcb->snd_nxt += skb->dlen;
         skb->end_seq = tcb->snd_nxt;
 
-        if (th->fin) tcb->snd_nxt++;
+        if (th->fin) {
+            tcb->snd_nxt++;
+        }
     }
     
     // TODO: don't according queue size, instead of buffer size, use function
@@ -234,13 +238,30 @@ int tcp_send_next(struct sock *sk, int amount)
     struct tcphdr *th;
     struct sk_buff *next;
     struct list_head *item, *tmp;
+    uint32_t snd_wnd = 0;
     int i = 0;
 
+    snd_wnd = min(tsk->cwnd, tcb->snd_wnd);
+
     list_for_each_safe(item, tmp, &sk->write_queue.head) {
-        if (++i > amount) break;
+        if (++i > amount) {
+            break;
+        }
         next = list_entry(item, struct sk_buff, list);
 
-        if (next == NULL) return -1;
+        if (next == NULL) {
+            return -1;
+        }
+
+        /* 跳过已发送过的 skb（seq 不为 0 表示已分配过序号） */
+        if (next->seq != 0) {
+            continue;
+        }
+
+        /* 受 cwnd 和 rwnd 限制，发不下就停 */
+        if (tsk->inflight + next->dlen > snd_wnd) {
+            break;
+        }
 
         skb_reset_header(next);
         tcp_transmit_skb(sk, next, tcb->snd_nxt);
@@ -248,11 +269,14 @@ int tcp_send_next(struct sock *sk, int amount)
         next->seq = tcb->snd_nxt;
         tcb->snd_nxt += next->dlen;
         next->end_seq = tcb->snd_nxt;
+        tsk->inflight += next->dlen;
 
         th = tcp_hdr(next);
-        if (th->fin) tcb->snd_nxt++;
+        if (th->fin) {
+            tcb->snd_nxt++;
+        }
     }
-    
+
     return 0;
 }
 
@@ -408,6 +432,12 @@ static void *tcp_retransmission_timeout(void *arg)
     }
 
     /* todo: should deal with zero window */
+
+    /* RFC 5681 §3.1：RTO 表示丢包，更新 ssthresh、cwnd 回到 1 SMSS 重新慢启动。
+     * TODO: 同一段被多次 RTO 重传时 ssthresh 应保持不变，需要按 skb 记录重传次数 */
+    tsk->ssthresh = max(tsk->inflight / 2, (uint32_t)(2 * tsk->smss));
+    tsk->cwnd = tsk->smss;
+    tsk->bytes_acked = 0;
 
     struct tcphdr *th = tcp_hdr(skb);
     skb_reset_header(skb);

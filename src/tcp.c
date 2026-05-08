@@ -116,6 +116,13 @@ struct sock *tcp_alloc_sock()
     tsk->rmss = 1460;
     // Default to 536 as per spec
     tsk->smss = 536;
+    /* RFC 5681 §3.1：IW 应按 SMSS 大小分三档（2/3/4 倍）。
+     * 这里先简化为固定 4*SMSS，待 MSS 协商完善后再细化。
+     * TODO: implement IW table per RFC 5681 §3.1 */
+    tsk->cwnd = 4 * tsk->smss;
+    tsk->ssthresh = 0xFFFFFFFFu;
+    tsk->inflight = 0;
+    tsk->bytes_acked = 0;
 
     skb_queue_init(&tsk->ofo_queue);
     
