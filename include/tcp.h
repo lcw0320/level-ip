@@ -242,6 +242,10 @@ struct tcp_sock {
     uint32_t ssthresh;
     uint32_t inflight;       /* FlightSize：已发送未 ACK 的字节数 */
     uint32_t bytes_acked;    /* 拥塞避免阶段累计被 ACK 的字节数 */
+    /* RFC 5681 §3.2 fast retransmit / fast recovery 状态 */
+    uint8_t dupacks;         /* 累计重复 ACK 次数 */
+    uint8_t in_recovery;     /* 是否处于 fast recovery */
+    uint16_t last_ack_win;   /* 上一次 ACK 通告的窗口（缩放前），用于 dupACK 判断 */
 
     uint8_t sackok;
     uint8_t sacks_allowed;
@@ -287,7 +291,8 @@ int tcp_read(struct sock *sk, void *buf, int len);
 int tcp_receive(struct tcp_sock *tsk, void *buf, int len);
 int tcp_input_state(struct sock *sk, struct tcphdr *th, struct sk_buff *skb, uint32_t saddr);
 int tcp_send_synack(struct sock *sk);
-int tcp_send_next(struct sock *sk, int amount);
+int tcp_send_next(struct sock *sk, int amount, uint32_t extra);
+int tcp_fast_retransmit(struct tcp_sock *tsk);
 int tcp_send_ack(struct sock *sk);
 void *tcp_send_delack(void *arg);
 int tcp_queue_fin(struct sock *sk);

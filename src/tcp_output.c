@@ -245,7 +245,8 @@ void *tcp_send_delack(void *arg)
     return NULL;
 }
 
-int tcp_send_next(struct sock *sk, int amount)
+/* todo： now it is useless */
+int tcp_send_next(struct sock *sk, int amount, uint32_t extra)
 {
     struct tcp_sock *tsk = tcp_sk(sk);
     struct tcb *tcb = &tsk->tcb;
@@ -255,7 +256,8 @@ int tcp_send_next(struct sock *sk, int amount)
     uint32_t snd_wnd = 0;
     int i = 0;
 
-    snd_wnd = min(tsk->cwnd, tcb->snd_wnd);
+    /* Limited Transmit / Fast Recovery 期间允许临时多发 extra 字节 */
+    snd_wnd = min(tsk->cwnd + extra, tcb->snd_wnd);
 
     list_for_each_safe(item, tmp, &sk->write_queue.head) {
         if (++i > amount) {
@@ -632,8 +634,27 @@ int tcp_queue_fin(struct sock *sk)
     th->ack = 1;
 
     tcpsock_dbg("Queueing fin", sk);
-    
+
     rc = tcp_queue_transmit_skb(sk, skb);
+
+    return rc;
+}
+
+/* RFC 5681 §3.2 step 3：重传 write_queue 队首（即 SND.UNA 起的丢失段），
+ * 不修改队列结构，仅重置 header 后用 snd_una 作为 seq 发出去。 */
+int tcp_fast_retransmit(struct tcp_sock *tsk)
+{
+    struct sock *sk = &tsk->sk;
+    struct sk_buff *skb = NULL;
+    int rc = 0;
+
+    skb = write_queue_head(sk);
+    if (skb == NULL) {
+        return 0;
+    }
+
+    skb_reset_header(skb);
+    rc = tcp_transmit_skb(sk, skb, tsk->tcb.snd_una);
 
     return rc;
 }

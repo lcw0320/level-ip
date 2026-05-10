@@ -80,10 +80,16 @@ static int tcp_parse_opts(struct tcp_sock *tsk, struct tcphdr *th)
  * RFC 5681 §3.1：根据被 ACK 的字节数增长 cwnd。
  * cwnd < ssthresh 时走慢启动（每 ACK 增 min(N, SMSS)）；
  * 否则走拥塞避免（每累计 cwnd 字节增一个 SMSS）。
+ * 注意：fast recovery 期间（in_recovery == 1）不在此处增长 cwnd，
+ *       cwnd 由 inflate/deflate 流程单独管理。
  */
 static void tcp_cong_avoid(struct tcp_sock *tsk, uint32_t acked)
 {
     if (acked == 0) {
+        return;
+    }
+
+    if (tsk->in_recovery) {
         return;
     }
 
@@ -136,6 +142,103 @@ static int tcp_clean_rto_queue(struct sock *sk, uint32_t una)
     }
 
     return rc;
+}
+
+/*
+ * RFC 5681 §2 严格定义：判断收到的 ACK 是否为重复 ACK。
+ * 五个条件全部满足才算：
+ *   1) ack_seq == snd_una（确认号没推进）
+ *   2) skb->dlen == 0（无数据）
+ *   3) 无 SYN/FIN 标志
+ *   4) th->win == last_ack_win（窗口未更新）
+ *   5) inflight > 0（还有数据在飞）
+ */
+static int tcp_is_dupack(struct tcp_sock *tsk, struct tcphdr *th, struct sk_buff *skb)
+{
+    if (th->ack_seq != tsk->tcb.snd_una) {
+        return 0;
+    }
+
+    if (skb->dlen != 0) {
+        return 0;
+    }
+
+    if (th->syn || th->fin) {
+        return 0;
+    }
+
+    if (th->win != tsk->last_ack_win) {
+        return 0;
+    }
+
+    if (tsk->inflight == 0) {
+        return 0;
+    }
+
+    return 1;
+}
+
+/*
+ * RFC 5681 §3.2 step 2-5：进入 fast retransmit / fast recovery。
+ *   ssthresh = max(FlightSize/2, 2*SMSS)
+ *   重传 SND.UNA 起的丢失段
+ *   cwnd = ssthresh + 3*SMSS  （inflate 3 个已离开网络的段）
+ *   重置 RTO 定时器，给 fast recovery 留出完整 RTO 时间窗
+ */
+static void tcp_enter_fast_recovery(struct tcp_sock *tsk)
+{
+    tsk->ssthresh = max(tsk->inflight / 2, (uint32_t)(2 * tsk->smss));
+
+    tcp_fast_retransmit(tsk);
+
+    tsk->cwnd = tsk->ssthresh + 3 * tsk->smss;
+    tsk->bytes_acked = 0;
+    tsk->in_recovery = 1;
+
+    tcp_rearm_rto_timer(tsk);
+}
+
+/*
+ * RFC 5681 §3.2 step 6：收到推进 SND.UNA 的新 ACK，退出 fast recovery，
+ * cwnd 放气回到 ssthresh。
+ */
+static void tcp_exit_fast_recovery(struct tcp_sock *tsk)
+{
+    tsk->cwnd = tsk->ssthresh;
+    tsk->in_recovery = 0;
+    tsk->dupacks = 0;
+    tsk->bytes_acked = 0;
+}
+
+/*
+ * RFC 5681 §3.2：收到 dupACK 时按 dupacks 计数分别处理。
+ *   1、2 个 dupACK -> Limited Transmit（步骤 1）：临时允许多发 1 段新数据
+ *   第 3 个 dupACK -> 进入 fast recovery（步骤 2-3），并尝试发 1 段新数据（步骤 5）
+ *   第 4 个及以后  -> cwnd inflate 1*SMSS（步骤 4），并尝试发 1 段新数据（步骤 5）
+ */
+static void tcp_handle_dupack(struct sock *sk)
+{
+    struct tcp_sock *tsk = tcp_sk(sk);
+    int pending = 0;
+    uint32_t extra = 0;
+
+    tsk->dupacks++;
+
+    if (tsk->dupacks < 3) {
+        /* Limited Transmit：第 N 个 dupACK 临时放行 N*SMSS */
+        extra = (uint32_t)tsk->dupacks * tsk->smss;
+    } else if (tsk->dupacks == 3) {
+        tcp_enter_fast_recovery(tsk);
+        extra = 0;
+    } else {
+        tsk->cwnd += tsk->smss;
+        extra = 0;
+    }
+
+    pending = skb_queue_len(&sk->write_queue);
+    if (pending > 0) {
+        tcp_send_next(sk, pending, extra);
+    }
 }
 
 static inline int __tcp_drop(struct sock *sk, struct sk_buff *skb)
@@ -445,12 +548,25 @@ int tcp_input_state(struct sock *sk, struct tcphdr *th, struct sk_buff *skb, uin
     case TCP_CLOSE_WAIT:
     case TCP_CLOSING:
     case TCP_LAST_ACK:
+        /* RFC 5681 §3.2：dupACK 严格判断后走 fast retransmit / fast recovery 分支，
+         * 处理完直接返回，不再沿用通用 ACK 路径（避免重复 send_next 与 RTO rearm）。 */
+        if (tcp_is_dupack(tsk, th, skb)) {
+            tcp_handle_dupack(sk);
+            tsk->last_ack_win = th->win;
+            free_skb(skb);
+            return 0;
+        }
+
         if (tcb->snd_una < th->ack_seq && th->ack_seq <= tcb->snd_nxt) {
             tcb->snd_una = th->ack_seq;
             /* Any segments on the retransmission queue which are thereby
                entirely acknowledged are removed. */
             tcp_rtt(tsk);
             tcp_clean_rto_queue(sk, tcb->snd_una);
+            /* RFC 5681 §3.2 step 6：第一个真正推进 SND.UNA 的新 ACK 触发 deflate */
+            if (tsk->in_recovery) {
+                tcp_exit_fast_recovery(tsk);
+            }
         }
 
         if (th->ack_seq < tcb->snd_una) {
@@ -472,6 +588,7 @@ int tcp_input_state(struct sock *sk, struct tcphdr *th, struct sk_buff *skb, uin
             update_snd_win(tsk, th->win);
         }
 
+        tsk->last_ack_win = th->win;
         break;
     }
 
@@ -600,7 +717,7 @@ int tcp_input_state(struct sock *sk, struct tcphdr *th, struct sk_buff *skb, uin
              * be an ACK for at least every second segment. */
             if (pending > 0) {
                 /* cwnd/rwnd 已在 tcp_send_next 内部判断，发多少由它决定 */
-                tcp_send_next(sk, pending);
+                tcp_send_next(sk, pending, 0);
                 tcp_rearm_rto_timer(tsk);
             } else if (th->psh || (skb->dlen > 1000 && ++tsk->delacks > 1)) {
                 tsk->delacks = 0;
