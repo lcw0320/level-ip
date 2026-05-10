@@ -123,6 +123,9 @@ struct sock *tcp_alloc_sock()
     tsk->ssthresh = 0xFFFFFFFFu;
     tsk->inflight = 0;
     tsk->bytes_acked = 0;
+    tsk->dupacks = 0;
+    tsk->in_recovery = 0;
+    tsk->last_ack_win = 0;
 
     skb_queue_init(&tsk->ofo_queue);
     
