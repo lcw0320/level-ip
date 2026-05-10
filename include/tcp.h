@@ -209,6 +209,13 @@ struct tcp_passive_conn
     uint32_t max_conn;
 };
 
+/* RTO 回调参数：定时器线程在到期时把 arg 透传给回调，
+ * 回调里比对 epoch 与 tsk->rto_epoch 判断自己是否仍是当前那次定时器。 */
+struct rto_timer_arg {
+    struct tcp_sock *tsk;
+    uint64_t epoch;
+};
+
 struct tcp_sock {
     struct sock sk;
     struct tcp_sock* ptsk;
@@ -220,6 +227,9 @@ struct tcp_sock {
     int32_t srtt;
     int32_t rttvar;
     uint32_t rto;
+    /* 用于让"已 spawn 出去但未执行/未拿到锁"的 RTO 回调能识别自己已过期。
+     * 每次 rearm/stop 都 ++rto_epoch，回调里若 arg->epoch != tsk->rto_epoch 即作废。 */
+    uint64_t rto_epoch;
     struct timer *retransmit;
     struct timer *delack;
     struct timer *keepalive;

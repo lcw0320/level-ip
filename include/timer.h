@@ -17,10 +17,15 @@ struct timer {
     int cancelled;
     void *(*handler)(void *);
     void *arg;
+    /* 仅在 timer 被取消、handler 未被派发时调用，用于释放堆分配的 arg。
+     * 一旦 handler 已派发，arg 所有权移交 handler，此处置 NULL 不再调用。 */
+    void (*arg_free)(void *);
     pthread_mutex_t lock;
 };
 
 struct timer *timer_add(uint32_t expire, void *(*handler)(void *), void *arg);
+struct timer *timer_add_with_release(uint32_t expire, void *(*handler)(void *),
+                                     void *arg, void (*arg_free)(void *));
 void timer_oneshot(uint32_t expire, void *(*handler)(void *), void *arg);
 void timer_release(struct timer *t);
 void timer_cancel(struct timer *t);
