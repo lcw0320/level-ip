@@ -32,6 +32,10 @@ static void timer_debug()
 
 static void timer_free(struct timer *t)
 {
+    if (t->arg_free != NULL && t->arg != NULL) {
+        t->arg_free(t->arg);
+        t->arg = NULL;
+    }
     pthread_mutex_destroy(&t->lock);
     free(t);
 }
@@ -86,6 +90,8 @@ static void timers_tick()
             if (create_detach_thread(t->handler, t->arg) < 0) {
                 continue;
             } else {
+                /* arg 所有权移交 handler，避免 timer_free 再次释放 */
+                t->arg = NULL;
                 t->cancelled = 1;
             }
         }
@@ -127,6 +133,12 @@ void timer_oneshot(uint32_t expire, void *(*handler)(void *), void *arg)
 
 struct timer *timer_add(uint32_t expire, void *(*handler)(void *), void *arg)
 {
+    return timer_add_with_release(expire, handler, arg, NULL);
+}
+
+struct timer *timer_add_with_release(uint32_t expire, void *(*handler)(void *),
+                                     void *arg, void (*arg_free)(void *))
+{
     struct timer *t = timer_alloc();
 
     int tick = timer_get_tick();
@@ -138,14 +150,15 @@ struct timer *timer_add(uint32_t expire, void *(*handler)(void *), void *arg)
     if (t->expires < tick) {
         print_err("ERR: Timer expiry integer wrap around\n");
     }
-     
+
     t->handler = handler;
     t->arg = arg;
+    t->arg_free = arg_free;
 
     pthread_mutex_lock(&lock);
     list_add_tail(&t->list, &timers);
     pthread_mutex_unlock(&lock);
-    
+
     return t;
 }
 

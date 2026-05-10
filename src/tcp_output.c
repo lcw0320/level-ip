@@ -380,11 +380,21 @@ static void tcp_notify_user(struct sock *sk)
 
 static void *tcp_connect_rto(void *arg)
 {
-    struct tcp_sock *tsk = (struct tcp_sock *) arg;
+    struct rto_timer_arg *targ = (struct rto_timer_arg *) arg;
+    struct tcp_sock *tsk = targ->tsk;
     struct tcb *tcb = &tsk->tcb;
     struct sock *sk = &tsk->sk;
 
     socket_wr_acquire(sk->sock);
+
+    /* 拿到锁后再校验：rearm/stop 都会把 epoch 推到下一个值，
+     * 此处 epoch 不一致说明这次定时器已被取消或被新一轮覆盖。 */
+    if (targ->epoch != tsk->rto_epoch) {
+        socket_release(sk->sock);
+        free(targ);
+        return NULL;
+    }
+
     tcp_release_rto_timer(tsk);
 
     if (sk->state == TCP_SYN_SENT) {
@@ -408,21 +418,33 @@ static void *tcp_connect_rto(void *arg)
     }
 
     socket_release(sk->sock);
+    free(targ);
 
     return NULL;
 }
 
 static void *tcp_retransmission_timeout(void *arg)
 {
-    struct tcp_sock *tsk = (struct tcp_sock *) arg;
+    struct rto_timer_arg *targ = (struct rto_timer_arg *) arg;
+    struct tcp_sock *tsk = targ->tsk;
     struct tcb *tcb = &tsk->tcb;
     struct sock *sk = &tsk->sk;
+    struct tcphdr *th = NULL;
+    struct sk_buff *skb = NULL;
 
     socket_wr_acquire(sk->sock);
 
+    /* 拿到锁后再校验 epoch：rearm/stop 都会推进 epoch，
+     * 不一致表示这次定时器已被取消或被新一轮覆盖，作废即可。 */
+    if (targ->epoch != tsk->rto_epoch) {
+        socket_release(sk->sock);
+        free(targ);
+        return NULL;
+    }
+
     tcp_release_rto_timer(tsk);
 
-    struct sk_buff *skb = write_queue_head(sk);
+    skb = write_queue_head(sk);
 
     if (!skb) {
         tsk->backoff = 0;
@@ -439,9 +461,9 @@ static void *tcp_retransmission_timeout(void *arg)
     tsk->cwnd = tsk->smss;
     tsk->bytes_acked = 0;
 
-    struct tcphdr *th = tcp_hdr(skb);
+    th = tcp_hdr(skb);
     skb_reset_header(skb);
-    
+
     tcp_transmit_skb(sk, skb, tcb->snd_una);
     /* RFC 6298: 2.5 Maximum value MAY be placed on RTO, provided it is at least
        60 seconds */
@@ -452,12 +474,13 @@ static void *tcp_retransmission_timeout(void *arg)
         sk->poll_events |= (POLLOUT | POLLERR | POLLHUP);
 
         socket_release(sk->sock);
+        free(targ);
         return NULL;
     } else {
         /* RFC 6298: Section 5.5 double RTO time */
         tsk->rto *= 2;
         tsk->backoff++;
-        tsk->retransmit = timer_add(tsk->rto, &tcp_retransmission_timeout, tsk);
+        tcp_rearm_rto_timer(tsk);
 
         if (th->fin) {
             tcp_handle_fin_state(sk);
@@ -466,6 +489,7 @@ static void *tcp_retransmission_timeout(void *arg)
 
 unlock:
     socket_release(sk->sock);
+    free(targ);
 
     return NULL;
 }
@@ -473,12 +497,26 @@ unlock:
 void tcp_rearm_rto_timer(struct tcp_sock *tsk)
 {
     struct sock *sk = &tsk->sk;
+    struct rto_timer_arg *arg = NULL;
+
     tcp_release_rto_timer(tsk);
 
+    /* 推进代号让上一次（如果还有遗留的 detached 回调）作废 */
+    tsk->rto_epoch++;
+
+    arg = malloc(sizeof(*arg));
+    if (arg == NULL) {
+        return;
+    }
+    arg->tsk = tsk;
+    arg->epoch = tsk->rto_epoch;
+
     if (sk->state == TCP_SYN_SENT) {
-        tsk->retransmit = timer_add(TCP_SYN_BACKOFF << tsk->backoff, &tcp_connect_rto, tsk);
+        tsk->retransmit = timer_add_with_release(TCP_SYN_BACKOFF << tsk->backoff,
+                                                 &tcp_connect_rto, arg, free);
     } else {
-        tsk->retransmit = timer_add(tsk->rto, &tcp_retransmission_timeout, tsk);
+        tsk->retransmit = timer_add_with_release(tsk->rto,
+                                                 &tcp_retransmission_timeout, arg, free);
     }
 }
 

@@ -418,6 +418,8 @@ void tcp_stop_rto_timer(struct tcp_sock *tsk)
         timer_cancel(tsk->retransmit);
         tsk->retransmit = NULL;
         tsk->backoff = 0;
+        /* 推进代号：即使已经 spawn 出去的回调还没拿到锁，也会被作废 */
+        tsk->rto_epoch++;
     }
 }
 
