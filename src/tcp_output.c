@@ -145,42 +145,56 @@ static int tcp_transmit_skb(struct sock *sk, struct sk_buff *skb, uint32_t seq)
     return ip_output(sk, skb);
 }
 
-static int tcp_queue_transmit_skb(struct sock *sk, struct sk_buff *skb)
+/* 发送窗口反压：FlightSize 超过 min(cwnd, rwnd) 就释放锁睡眠，
+ * 由 ACK 路径释放窗口后唤醒，确保只有真正发出去的 skb 才进入 write_queue。 */
+static void tcp_wait_snd_wnd(struct sock *sk, uint32_t bytes)
 {
     struct tcp_sock *tsk = tcp_sk(sk);
     struct tcb *tcb = &tsk->tcb;
-    struct tcphdr * th = tcp_hdr(skb);
     uint32_t snd_wnd = 0;
-    int rc = 0;
 
-    if (skb_queue_empty(&sk->write_queue)) {
-        tcp_rearm_rto_timer(tsk);
-    }
-
-    /* RFC 5681：FlightSize 不能超过 min(cwnd, rwnd)，否则只入队等 ACK 释放窗口 */
     snd_wnd = min(tsk->cwnd, tcb->snd_wnd);
-    if (tsk->inflight + skb->dlen <= snd_wnd) {
-        rc = tcp_transmit_skb(sk, skb, tcb->snd_nxt);
-        tsk->inflight += skb->dlen;
-        skb->seq = tcb->snd_nxt;
-        tcb->snd_nxt += skb->dlen;
-        skb->end_seq = tcb->snd_nxt;
-
-        if (th->fin) {
-            tcb->snd_nxt++;
-        }
-    }
-    
-    // TODO: don't according queue size, instead of buffer size, use function
-    if (sk->write_queue.qlen >= sk->write_queue.max_q) {
+    while (tsk->inflight + bytes > snd_wnd) {
         pthread_mutex_lock(&sk->write_wait.lock);
         socket_release(sk->sock);
         wait_sleep(&sk->write_wait);
         pthread_mutex_unlock(&sk->write_wait.lock);
         socket_wr_acquire(sk->sock);
+        snd_wnd = min(tsk->cwnd, tcb->snd_wnd);
+    }
+}
+
+static int tcp_queue_transmit_skb(struct sock *sk, struct sk_buff *skb)
+{
+    struct tcp_sock *tsk = tcp_sk(sk);
+    struct tcb *tcb = &tsk->tcb;
+    struct tcphdr *th = tcp_hdr(skb);
+    int was_empty = 0;
+    int rc = 0;
+
+    /* RFC 5681：FlightSize 不能超过 min(cwnd, rwnd)，等窗口打开再发 */
+    tcp_wait_snd_wnd(sk, skb->dlen);
+
+    was_empty = skb_queue_empty(&sk->write_queue);
+
+    skb->seq = tcb->snd_nxt;
+    tcb->snd_nxt += skb->dlen;
+    skb->end_seq = tcb->snd_nxt;
+    if (th->fin) {
+        tcb->snd_nxt++;
+    }
+    tsk->inflight += skb->dlen;
+
+    /* 先入队再发送，保证 write_queue 始终按 seq 升序排列；
+     * 否则发送在前、入队在后，期间释放锁会让 ACK 处理看到错位的队列。 */
+    skb_queue_tail(&sk->write_queue, skb);
+
+    /* RTO 与 inflight 绑定：原本队列空（inflight 必为 0）才需要 arm */
+    if (was_empty) {
+        tcp_rearm_rto_timer(tsk);
     }
 
-    skb_queue_tail(&sk->write_queue, skb);
+    rc = tcp_transmit_skb(sk, skb, skb->seq);
 
     return rc;
 }

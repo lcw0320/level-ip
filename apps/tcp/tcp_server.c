@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <netdb.h>
@@ -67,29 +68,64 @@ void print_sockaddr(const struct sockaddr *addr, socklen_t addrlen)
     }
 }
 
+static int dump_recv_data(int dump_fd, const char *buf, ssize_t len)
+{
+    ssize_t dumped = 0;
+    ssize_t n = 0;
+
+    if (dump_fd < 0) {
+        return 0;
+    }
+
+    while (dumped < len) {
+        n = write(dump_fd, buf + dumped, len - dumped);
+        if (n < 0) {
+            perror("dump write");
+            return -1;
+        }
+        dumped += n;
+    }
+
+    return 0;
+}
+
 int echo_task(int fd)
 {
     char buf[4096]; // 增大一点缓冲区，减少系统调用次数
     ssize_t readSize; // 注意用 ssize_t
     ssize_t writeSize;
+    int dump_fd = -1;
+    size_t dump_off = 0;
 
     // 建议：关闭 stdout 缓冲，防止日志堵塞
     setvbuf(stdout, NULL, _IONBF, 0);
 
+    /* 每次连接覆盖写入 test.txt，便于和源文件 diff 定位错位 */
+    dump_fd = open("test.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (dump_fd < 0) {
+        perror("open test.txt");
+    }
+
     printf("start echo task fd: %d\n", fd);
-    
+
     while((readSize = read(fd, buf, sizeof(buf))) > 0) {
         // 不要打印 buf 的内容，因为 urandom 是乱码，打印出来会刷屏且极慢
-        printf("recv size: %ld\n", readSize); 
-        
+        printf("recv size: %ld off: %zu\n", readSize, dump_off);
+
+        dump_recv_data(dump_fd, buf, readSize);
+        dump_off += readSize;
+
         // 必须确保 write 写入了所有读取到的字节
         size_t bytes_to_write = readSize;
         size_t bytes_written = 0;
-        
+
         while (bytes_written < bytes_to_write) {
             writeSize = write(fd, buf + bytes_written, bytes_to_write - bytes_written);
             if (writeSize < 0) {
                 perror("write error");
+                if (dump_fd >= 0) {
+                    close(dump_fd);
+                }
                 close(fd);
                 return -1;
             }
@@ -100,11 +136,14 @@ int echo_task(int fd)
     if (readSize < 0) {
         perror("read error");
     } else {
-        printf("client disconnected, echo finished.\n");
+        printf("client disconnected, echo finished. total dumped: %zu\n", dump_off);
     }
 
+    if (dump_fd >= 0) {
+        close(dump_fd);
+    }
     close(fd);
-    exit(EXIT_SUCCESS); 
+    exit(EXIT_SUCCESS);
 }
 
 int main(int argc, char **argv)
