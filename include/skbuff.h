@@ -23,6 +23,7 @@ struct sk_buff {
     uint8_t *head;
     uint8_t *data;
     uint8_t *payload;
+    uint8_t sacked;
 };
 
 struct sk_buff_head {

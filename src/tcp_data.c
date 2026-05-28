@@ -129,7 +129,7 @@ int tcp_data_queue(struct tcp_sock *tsk, struct tcphdr *th, struct sk_buff *skb)
         tcp_data_insert_ordered(&tsk->ofo_queue, skb);
 
         if (tsk->sackok) {
-            tcp_calculate_sacks(tsk); 
+            tcp_calculate_sacks(tsk, skb->seq, skb->end_seq);
         }
         
         /* RFC5581: A TCP receiver SHOULD send an immediate duplicate ACK when an out-

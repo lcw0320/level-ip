@@ -251,6 +251,7 @@ struct tcp_sock {
     uint8_t sacks_allowed;
     uint8_t sacklen;
     struct tcp_sack_block sacks[4];
+    uint32_t sack_max_right;
 
     // === 新增的窗口移位计数器 (Window Shift Counters) ===
     // 对应 RFC 1323 描述的 Snd.Wind.Shift 和 Rcv.Wind.Shift
@@ -314,6 +315,6 @@ void tcp_release_rto_timer(struct tcp_sock *tsk);
 void tcp_stop_delack_timer(struct tcp_sock *tsk);
 void tcp_release_delack_timer(struct tcp_sock *tsk);
 void tcp_rearm_user_timeout(struct sock *sk);
-int tcp_calculate_sacks(struct tcp_sock *tsk);
+int tcp_calculate_sacks(struct tcp_sock *tsk, uint32_t trigger_seq, uint32_t trigger_end_seq);
 
 #endif

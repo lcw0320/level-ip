@@ -542,35 +542,51 @@ void tcp_rtt(struct tcp_sock *tsk)
     tsk->rto = tsk->srtt + k;
 }
 
-int tcp_calculate_sacks(struct tcp_sock *tsk)
+/* RFC 2018 §4：第一个 block 必须是触发本次 ACK 的最新段，
+ * 后续 blocks 按 ofo_queue 顺序填入（跳过与第一个 block 重叠的段）。*/
+int tcp_calculate_sacks(struct tcp_sock *tsk, uint32_t trigger_seq, uint32_t trigger_end_seq)
 {
-    struct tcp_sack_block *sb = &tsk->sacks[tsk->sacklen];
+    struct tcp_sack_block *sb = NULL;
+    struct sk_buff *next = NULL;
+    struct list_head *item = NULL;
+    struct list_head *tmp = NULL;
 
-    sb->left = 0;
-    sb->right = 0;
+    memset(tsk->sacks, 0, sizeof(tsk->sacks));
+    tsk->sacklen = 0;
 
-    struct sk_buff *next;
-    struct list_head *item, *tmp;
+    tsk->sacks[0].left = trigger_seq;
+    tsk->sacks[0].right = trigger_end_seq;
+    tsk->sacklen = 1;
+
+    sb = &tsk->sacks[1];
 
     list_for_each_safe(item, tmp, &tsk->ofo_queue.head) {
         next = list_entry(item, struct sk_buff, list);
 
+        if (next->seq >= trigger_seq && next->end_seq <= trigger_end_seq) {
+            continue;
+        }
+
+        if (tsk->sacklen >= tsk->sacks_allowed) {
+            break;
+        }
+
         if (sb->left == 0) {
             sb->left = next->seq;
+            sb->right = next->end_seq;
             tsk->sacklen++;
-        }
-        
-        if (sb->right == 0) sb->right = next->end_seq;
-        else if (sb->right == next->seq) sb->right = next->end_seq;
-        else {
-            if (tsk->sacklen >= tsk->sacks_allowed) break;
-            
+        } else if (sb->right == next->seq) {
+            sb->right = next->end_seq;
+        } else {
+            if (tsk->sacklen >= tsk->sacks_allowed) {
+                break;
+            }
             sb = &tsk->sacks[tsk->sacklen];
             sb->left = next->seq;
             sb->right = next->end_seq;
             tsk->sacklen++;
         }
     }
-    
+
     return 0;
 }
