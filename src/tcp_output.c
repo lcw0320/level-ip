@@ -65,38 +65,37 @@ static int tcp_syn_options(struct sock *sk, struct tcp_options *opts)
 static int tcp_write_options(struct tcp_sock *tsk, struct tcphdr *th)
 {
     uint8_t *ptr = th->data;
+    struct tcp_opt_wso *wso = NULL;
+    struct tcp_sack_block *sb = NULL;
+    int i = 0;
 
-    if (!tsk->wso_allowed) return 0;
-
-    // if syn send windows scale, 
-    *ptr++ = TCP_OPT_NOOP;
-    struct tcp_opt_wso *wso = (struct tcp_opt_wso *)ptr;
-    wso->kind = TCP_OPT_WSO;
-    wso->len = TCP_OPTLEN_WSO;
-    wso->wso = tsk->rcv_scale;
-    return 0;
-
-    // todo: should add sack options also
-    if (!tsk->sackok || tsk->sacks[0].left == 0) return 0;
-
-    *ptr++ = TCP_OPT_NOOP;
-    *ptr++ = TCP_OPT_NOOP;
-    *ptr++ = TCP_OPT_SACK;
-    *ptr++ = 2 + tsk->sacklen * 8;
-
-    struct tcp_sack_block *sb = (struct tcp_sack_block *)ptr;
-
-    for (int i = tsk->sacklen - 1; i >= 0; i--) {
-        sb->left = htonl(tsk->sacks[i].left);
-        sb->right = htonl(tsk->sacks[i].right);
-        tsk->sacks[i].left = 0;
-        tsk->sacks[i].right = 0;
-
-        sb += 1;
-        ptr += sizeof(struct tcp_sack_block);
+    if (tsk->wso_allowed) {
+        *ptr++ = TCP_OPT_NOOP;
+        wso = (struct tcp_opt_wso *)ptr;
+        wso->kind = TCP_OPT_WSO;
+        wso->len = TCP_OPTLEN_WSO;
+        wso->wso = tsk->rcv_scale;
+        ptr += sizeof(struct tcp_opt_wso);
     }
 
-    tsk->sacklen = 0;
+    if (tsk->sackok && tsk->sacklen > 0 && tsk->sacks[0].left != 0) {
+        *ptr++ = TCP_OPT_NOOP;
+        *ptr++ = TCP_OPT_NOOP;
+        *ptr++ = TCP_OPT_SACK;
+        *ptr++ = 2 + tsk->sacklen * 8;
+
+        sb = (struct tcp_sack_block *)ptr;
+
+        for (i = 0; i < tsk->sacklen; i++) {
+            sb->left = htonl(tsk->sacks[i].left);
+            sb->right = htonl(tsk->sacks[i].right);
+            sb++;
+            ptr += sizeof(struct tcp_sack_block);
+        }
+
+        memset(tsk->sacks, 0, sizeof(tsk->sacks));
+        tsk->sacklen = 0;
+    }
 
     return 0;
 }
@@ -301,17 +300,17 @@ static int tcp_options_len(struct sock *sk)
     struct tcp_sock *tsk = tcp_sk(sk);
     uint8_t optlen = 0;
 
-    if (tsk->sackok && tsk->sacklen > 0) {
-        for (int i = 0; i < tsk->sacklen; i++) {
-            if (tsk->sacks[i].left != 0) {
-                optlen += 8;
-            }
-        }
-
-        optlen += 2;
+    if (tsk->wso_allowed) {
+        optlen += 1 + TCP_OPTLEN_WSO;  /* 1 NOOP + 3 WSO */
     }
 
-    while (optlen % 4 > 0) optlen++;
+    if (tsk->sackok && tsk->sacklen > 0 && tsk->sacks[0].left != 0) {
+        optlen += 2 + 2 + tsk->sacklen * 8;  /* 2 NOOP + kind + len + blocks */
+    }
+
+    while (optlen % 4 > 0) {
+        optlen++;
+    }
 
     return optlen;
 }
@@ -439,6 +438,21 @@ static void *tcp_connect_rto(void *arg)
     return NULL;
 }
 
+/* RFC 2018 §5: 超时后接收方可能 renege，清空所有 SACK 标记从 snd_una 重传 */
+static void tcp_sack_clear(struct tcp_sock *tsk)
+{
+    struct sock *sk = &tsk->sk;
+    struct sk_buff *s = NULL;
+    struct list_head *it = NULL;
+    struct list_head *tmp = NULL;
+
+    list_for_each_safe(it, tmp, &sk->write_queue.head) {
+        s = list_entry(it, struct sk_buff, list);
+        s->sacked = 0;
+    }
+    tsk->sack_max_right = 0;
+}
+
 static void *tcp_retransmission_timeout(void *arg)
 {
     struct rto_timer_arg *targ = (struct rto_timer_arg *) arg;
@@ -476,6 +490,8 @@ static void *tcp_retransmission_timeout(void *arg)
     tsk->ssthresh = max(tsk->inflight / 2, (uint32_t)(2 * tsk->smss));
     tsk->cwnd = tsk->smss;
     tsk->bytes_acked = 0;
+
+    tcp_sack_clear(tsk);
 
     th = tcp_hdr(skb);
     skb_reset_header(skb);
@@ -640,21 +656,39 @@ int tcp_queue_fin(struct sock *sk)
     return rc;
 }
 
-/* RFC 5681 §3.2 step 3：重传 write_queue 队首（即 SND.UNA 起的丢失段），
- * 不修改队列结构，仅重置 header 后用 snd_una 作为 seq 发出去。 */
-int tcp_fast_retransmit(struct tcp_sock *tsk)
+static struct sk_buff *tcp_retransmit_candidate(struct tcp_sock *tsk)
 {
     struct sock *sk = &tsk->sk;
     struct sk_buff *skb = NULL;
+    struct list_head *item = NULL;
+    struct list_head *tmp = NULL;
+
+    if (tsk->sack_max_right > 0) {
+        list_for_each_safe(item, tmp, &sk->write_queue.head) {
+            skb = list_entry(item, struct sk_buff, list);
+            if (!skb->sacked && skb->end_seq <= tsk->sack_max_right) {
+                return skb;
+            }
+        }
+    }
+
+    return write_queue_head(sk);
+}
+
+/* RFC 5681 §3.2 step 3：重传 write_queue 中第一个未被 SACK 确认的丢失段。
+ * 若存在 sack_max_right，跳过已 sacked 的段只重传空洞；否则退化为重传队首。 */
+int tcp_fast_retransmit(struct tcp_sock *tsk)
+{
+    struct sk_buff *candidate = NULL;
     int rc = 0;
 
-    skb = write_queue_head(sk);
-    if (skb == NULL) {
+    candidate = tcp_retransmit_candidate(tsk);
+    if (candidate == NULL) {
         return 0;
     }
 
-    skb_reset_header(skb);
-    rc = tcp_transmit_skb(sk, skb, tsk->tcb.snd_una);
+    skb_reset_header(candidate);
+    rc = tcp_transmit_skb(&tsk->sk, candidate, candidate->seq);
 
     return rc;
 }

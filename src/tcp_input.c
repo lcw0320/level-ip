@@ -5,25 +5,53 @@
 #include "skbuff.h"
 #include "sock.h"
 
+static void tcp_sack_mark_write_queue(struct tcp_sock *tsk, struct tcp_sack_block *blocks, int nblocks)
+{
+    struct sock *sk = &tsk->sk;
+    struct sk_buff *skb = NULL;
+    struct list_head *item = NULL;
+    struct list_head *tmp = NULL;
+    uint32_t max_right = 0;
+    int i = 0;
+
+    list_for_each_safe(item, tmp, &sk->write_queue.head) {
+        skb = list_entry(item, struct sk_buff, list);
+        for (i = 0; i < nblocks; i++) {
+            if (skb->seq >= blocks[i].left && skb->end_seq <= blocks[i].right) {
+                skb->sacked = 1;
+                break;
+            }
+        }
+    }
+
+    for (i = 0; i < nblocks; i++) {
+        if (blocks[i].right > max_right) {
+            max_right = blocks[i].right;
+        }
+    }
+
+    if (max_right > tsk->sack_max_right) {
+        tsk->sack_max_right = max_right;
+    }
+}
+
 static int tcp_parse_opts(struct tcp_sock *tsk, struct tcphdr *th)
 {
     uint8_t *ptr = th->data;
     uint8_t optlen = tcp_hlen(th) - 20;
-    // struct tcp_opt_mss *opt_mss = NULL;
     struct tcp_opt_wso *opt_wso = NULL;
+    struct tcp_sack_block sack_blocks[4];
     uint8_t sack_seen = 0;
     uint8_t tsopt_seen = 0;
-    
-    while (optlen > 0 && optlen < 30) {
+    int nblocks = 0;
+    uint8_t sack_datalen = 0;
+    int i = 0;
+
+    memset(sack_blocks, 0, sizeof(sack_blocks));
+
+    while (optlen > 0 && optlen < 40) {
         switch (*ptr) {
         case TCP_OPT_MSS:
-            // opt_mss = (struct tcp_opt_mss *)ptr;
-            // uint16_t mss = ntohs(opt_mss->mss);
-
-            // if (mss > 536 && mss <= 1460) {
-            //     tsk->smss = mss;
-            // }
-
             ptr += sizeof(struct tcp_opt_mss);
             optlen -= 4;
             break;
@@ -33,20 +61,34 @@ static int tcp_parse_opts(struct tcp_sock *tsk, struct tcphdr *th)
             break;
         case TCP_OPT_SACK_OK:
             ptr += TCP_OPTLEN_SACK;
-            // sack_seen = 1;
             optlen -= TCP_OPTLEN_SACK;
+            break;
+        case TCP_OPT_SACK:
+            sack_datalen = *(ptr + 1);
+            nblocks = (sack_datalen - 2) / 8;
+            if (nblocks > 4) {
+                nblocks = 4;
+            }
+            ptr += 2;
+            optlen -= 2;
+            for (i = 0; i < nblocks; i++) {
+                struct tcp_sack_block *sb = (struct tcp_sack_block *)ptr;
+                sack_blocks[i].left = ntohl(sb->left);
+                sack_blocks[i].right = ntohl(sb->right);
+                ptr += 8;
+                optlen -= 8;
+            }
+            sack_seen = 1;
             break;
         case TCP_OPT_TS:
             ptr += TCP_OPTLEN_TS;
-            // tsopt_seen = 1;
             optlen -= TCP_OPTLEN_TS;
             break;
         case TCP_OPT_WSO:
             opt_wso = (struct tcp_opt_wso *)ptr;
-            uint8_t wso = opt_wso->wso;
-            
-            if (wso <= 14) {
-                tsk->snd_scale = wso;
+
+            if (opt_wso->wso <= 14) {
+                tsk->snd_scale = opt_wso->wso;
             } else {
                 tsk->snd_scale = 14;
             }
@@ -66,11 +108,7 @@ static int tcp_parse_opts(struct tcp_sock *tsk, struct tcphdr *th)
     }
 
     if (sack_seen && tsk->sackok) {
-        // There's room for 4 sack blocks without TS OPT
-        if (tsk->tsopt) tsk->sacks_allowed = 3;
-        else tsk->sacks_allowed = 4;
-    } else {
-        tsk->sackok = 0;
+        tcp_sack_mark_write_queue(tsk, sack_blocks, nblocks);
     }
 
     return 0;
