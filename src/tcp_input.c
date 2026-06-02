@@ -5,6 +5,11 @@
 #include "skbuff.h"
 #include "sock.h"
 
+static void update_snd_win(struct tcp_sock *tsk, uint16_t win)
+{
+    tsk->tcb.snd_wnd = win << tsk->snd_scale;
+}
+
 static void tcp_sack_mark_write_queue(struct tcp_sock *tsk, struct tcp_sack_block *blocks, int nblocks)
 {
     struct sock *sk = &tsk->sk;
@@ -450,6 +455,7 @@ static int tcp_synsent(struct tcp_sock *tsk, struct sk_buff *skb, struct tcphdr 
         tcp_send_ack(&tsk->sk);
         tcp_rearm_user_timeout(&tsk->sk);
         tcp_parse_opts(tsk, th);
+        update_snd_win(tsk, th->win);
         sock_connected(sk);
     } else {
         tcp_set_state(sk, TCP_SYN_RECEIVED);
@@ -519,11 +525,6 @@ static int add_tsk_to_parent_establied_conn_list(struct tcp_sock *tsk)
     wait_wakeup(&tsk->ptsk->tcp_passive_conn_queue.recv_wait);
 
     return 0;
-}
-
-static void update_snd_win(struct tcp_sock *tsk, uint16_t win)
-{
-    tsk->tcb.snd_wnd = win << tsk->snd_scale;
 }
 
 /*
