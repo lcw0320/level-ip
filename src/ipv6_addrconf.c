@@ -1,6 +1,7 @@
 #include "syshead.h"
 #include "ipv6_addrconf.h"
 #include "ipv6.h"
+#include "route.h"
 #include "netdev.h"
 #include "ndp.h"
 #include "timer.h"
@@ -318,6 +319,7 @@ void ipv6_addrconf_update_lifetime(const struct in6_addr *prefix,
 
 void ipv6_addrconf_init(void)
 {
+    struct in6_addr ll_prefix;
     char addr_str[IPV6_ADDR_STRLEN] = {0};
     int ret = 0;
 
@@ -339,6 +341,12 @@ void ipv6_addrconf_init(void)
                 addr_str,
                 netdev->hwaddr[0], netdev->hwaddr[1], netdev->hwaddr[2],
                 netdev->hwaddr[3], netdev->hwaddr[4], netdev->hwaddr[5]);
+
+    /* Add link-local route: fe80::/10 (RFC 4291 §2.5.6) */
+    memset(&ll_prefix, 0, sizeof(struct in6_addr));
+    ll_prefix.s6_addr[0] = 0xfe;
+    ll_prefix.s6_addr[1] = 0x80;
+    route6_add(&ll_prefix, NULL, 10, RT_HOST, 0, netdev);
 
     /* Perform DAD on the link-local address before using it */
     ipv6_dad_start(&netdev->addr6_ll, netdev);
