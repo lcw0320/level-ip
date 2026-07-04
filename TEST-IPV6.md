@@ -295,6 +295,185 @@ wireshark /tmp/ipv6-detail.pcap
 
 ---
 
+## 测试 9：SLAAC 全局地址（用 radvd 模拟路由器）
+
+> 验证协议栈能通过 SLAAC 自动获取全局地址。
+
+### 环境准备
+
+```bash
+# 安装 radvd（路由器通告守护进程）
+sudo apt install radvd -y
+
+# 创建 radvd 配置
+cat > /tmp/radvd.conf << 'EOF'
+interface tap0 {
+    AdvSendAdvert on;
+    MinRtrAdvInterval 3;
+    MaxRtrAdvInterval 10;
+    prefix fd00:1234::/64 {
+        AdvOnLink on;
+        AdvAutonomous on;
+        AdvValidLifetime 86400;
+        AdvPreferredLifetime 14400;
+    };
+};
+EOF
+
+# 给 tap0 配置一个 ULA 地址（路由器地址）
+sudo ip -6 addr add fd00:1234::1/64 dev tap0
+
+# 启用 IPv6 转发（radvd 需要）
+sudo sysctl -w net.ipv6.conf.tap0.forwarding=1
+
+# 启动 radvd
+sudo radvd -C /tmp/radvd.conf -d 1 -m logfile -l /tmp/radvd.log &
+RADVD_PID=$!
+echo "radvd PID: $RADVD_PID"
+```
+
+### 重启协议栈
+
+```bash
+sudo pkill lvl-ip
+sudo ./lvl-ip 2>&1 | tee /tmp/lvl-ip-slaac.log &
+sleep 5
+```
+
+### 判定标准
+
+```bash
+# 1. 检查协议栈日志：应该看到 RA 处理和全局地址生成
+grep -E "RA|prefix|global|addrconf" /tmp/lvl-ip-slaac.log
+```
+
+**✅ PASS**：日志中应包含：
+- `ndp recv RA` — 收到了路由器通告
+- `prefix` 或 `global` — 提取了前缀信息
+- `addrconf` — 生成了全局地址（`fd00:1234::XXXX`）
+
+```bash
+# 2. 检查路由表：应该有默认路由
+ip -6 route show dev tap0 | grep default
+```
+
+**✅ PASS**：看到 `default via fe80::XXX dev tap0`
+
+```bash
+# 3. 测试全局地址 ping6
+ping6 -c 2 -I tap0 fd00:1234::1
+```
+
+**✅ PASS**：全局地址互通。
+
+### 清理
+
+```bash
+sudo kill $RADVD_PID 2>/dev/null
+sudo sysctl -w net.ipv6.conf.tap0.forwarding=0
+sudo ip -6 addr del fd00:1234::1/64 dev tap0 2>/dev/null
+```
+
+### 理解练习
+
+- RA 中的 `AdvAutonomous on` 是什么意思？如果关闭会怎样？
+- `AdvValidLifetime` 和 `AdvPreferredLifetime` 的区别？
+- 为什么前缀用 `fd00::/7`（ULA）而不是 `2001::/3`（全局）？
+
+---
+
+## 测试 10：TCP over IPv6
+
+> 验证 TCP 连接能通过 IPv6 建立。需要先完成测试 9（有全局地址）。
+
+### 环境准备
+
+```bash
+# 确保 radvd 在运行（测试 9 的环境）
+# 确保协议栈有全局地址
+
+# 在宿主机上启动一个简单的 TCP 监听
+nc -6 -l fd00:1234::1 8888 &
+NC_PID=$!
+echo "nc PID: $NC_PID"
+```
+
+### 通过协议栈发起 TCP 连接
+
+```bash
+# 用 liblevelip.so wrapper 让应用走协议栈
+LD_PRELOAD=./tools/liblevelip.so nc -6 fd00:1234::1 8888
+```
+
+输入一些文字，看宿主机端是否收到。
+
+### 判定标准
+
+**✅ PASS**：
+- 连接成功建立（没有 "Connection refused"）
+- 文字能从一端传到另一端
+- 协议栈日志显示 TCP 三次握手
+
+```bash
+# 检查 TCP 连接
+grep -E "tcp.*SYN|ESTABLISHED|connect" /tmp/lvl-ip-slaac.log | tail -5
+```
+
+```bash
+# 抓包验证 TCP 三次握手
+sudo tcpdump -i tap0 -n 'ip6 and tcp' -v
+```
+
+**预期抓包**：
+```
+1. 协议栈 → 宿主机 : TCP SYN [MSS=1440]
+2. 宿主机 → 协议栈 : TCP SYN-ACK [MSS=1460]
+3. 协议栈 → 宿主机 : TCP ACK
+```
+
+### 清理
+
+```bash
+sudo kill $NC_PID 2>/dev/null
+```
+
+### 理解练习
+
+- IPv6 TCP 的 MSS 为什么是 1440 而不是 1460？（提示：40 字节 IPv6 头 vs 20 字节 IPv4 头）
+- `liblevelip.so` 是怎么拦截 `socket()` 调用的？（提示：`LD_PRELOAD`）
+- TCP 校验和的伪首部在 IPv4 和 IPv6 下有什么不同？
+
+---
+
+## 测试 11：NDP 状态机观察
+
+> 观察邻居缓存的完整状态变迁。
+
+```bash
+# 清空缓存
+sudo ip -6 neigh flush dev tap0
+
+# 持续监控（终端 1）
+watch -n 1 'ip -6 neigh show dev tap0'
+
+# 触发 ping6（终端 2）
+ping6 -c 1 -I tap0 $STACK_LL
+
+# 观察状态变化：
+# (none) → INCOMPLETE → REACHABLE → STALE → DELAY → PROBE → REACHABLE/FAILED
+```
+
+### 判定标准
+
+**✅ PASS**：观察到至少 3 种不同状态。
+
+**理解**：
+- `REACHABLE` 持续多久？（默认约 30 秒）
+- `STALE` 和 `DELAY` 的区别？
+- 为什么 `PROBE` 阶段发的是**单播** NS 而不是多播？
+
+---
+
 ## 测试结果记录
 
 | # | 测试 | 结果 | 备注 |
@@ -309,6 +488,9 @@ wireshark /tmp/ipv6-detail.pcap
 | 6 | RS 发送 | ✅/❌ | |
 | 7 | 路由表 | ✅/❌ | |
 | 8 | Wireshark 字段 | ✅/❌ | |
+| 9 | SLAAC 全局地址 | ✅/❌ | |
+| 10 | TCP over IPv6 | ✅/❌ | |
+| 11 | NDP 状态机 | ✅/❌ | |
 
 ---
 
