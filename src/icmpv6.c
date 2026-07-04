@@ -269,10 +269,14 @@ void icmpv6_echo_reply(struct sk_buff *skb, struct ipv6hdr *ip6h,
     struct icmpv6_hdr *reply_icmph = NULL;
     struct in6_addr reply_saddr;
     struct in6_addr reply_daddr;
+    struct netdev *dev = NULL;
     uint16_t icmpv6_len = 0;
     unsigned int total_size = 0;
 
     icmpv6_len = ntohs(ip6h->payload_len);
+
+    /* Save dev before freeing original skb */
+    dev = skb->dev;
 
     /* Swap addresses: reply src = incoming dst, reply dst = incoming src */
     memcpy(&reply_saddr, &ip6h->daddr, sizeof(struct in6_addr));
@@ -287,9 +291,10 @@ void icmpv6_echo_reply(struct sk_buff *skb, struct ipv6hdr *ip6h,
         return;
     }
 
-    /* Reserve headroom, then copy ICMPv6 data */
+    /* Reserve headroom for ETH + IPv6 headers, then append ICMPv6 data */
     skb_reserve(reply, ETH_HDR_LEN + IPV6_HDR_LEN);
-    memcpy(skb_push(reply, icmpv6_len), (uint8_t *)icmph, icmpv6_len);
+    memcpy(reply->data, (uint8_t *)icmph, icmpv6_len);
+    reply->len = icmpv6_len;
 
     /* Change type to Echo Reply */
     reply_icmph = (struct icmpv6_hdr *)reply->data;
@@ -303,6 +308,7 @@ void icmpv6_echo_reply(struct sk_buff *skb, struct ipv6hdr *ip6h,
 
     /* Send reply via IPv6 output path */
     reply->protocol = ETH_P_IPV6;
+    reply->dev = dev;
     ipv6_output(reply, NEXTHDR_ICMPV6, &reply_saddr, &reply_daddr);
 }
 
