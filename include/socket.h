@@ -98,7 +98,9 @@ int _getpeername(pid_t pid, int socket, struct sockaddr *restrict address,
 int _getsockname(pid_t pid, int socket, struct sockaddr *restrict address,
                  socklen_t *restrict address_len);
 
-struct socket *socket_lookup(uint32_t saddr, uint32_t daddr, uint16_t sport, uint16_t dport);
+struct socket *socket_lookup(uint8_t family, uint32_t saddr, uint32_t daddr,
+                             const struct in6_addr *saddr6, const struct in6_addr *daddr6,
+                             uint16_t sport, uint16_t dport);
 struct socket *socket_find(struct socket *sock);
 struct socket *socker_find_protocol_port(uint16_t port, int protocol);
 int socket_rd_acquire(struct socket *sock);
@@ -107,6 +109,7 @@ int socket_release(struct socket *sock);
 int socket_free(struct socket *sock);
 int socket_delete(struct socket *sock);
 void abort_sockets();
+void socket_adjust_pmtu6(const struct in6_addr *daddr, uint16_t pmtu);
 void socket_debug();
 struct socket *get_socket(pid_t pid, uint32_t fd);
 

@@ -45,19 +45,19 @@ extern const char *tcp_dbg_states[];
     do {                                                                \
         print_debug("TCP %u.%u.%u.%u.%u > %u.%u.%u.%u.%u: " \
                     "Flags [S%uA%uP%uF%uR%u], seq %u:%u, ack %u, win %u rto %d boff %d", \
-                    (uint8_t)(sk->daddr >> 24), (uint8_t)(sk->daddr >> 16), (uint8_t)(sk->daddr >> 8), (uint8_t)(sk->daddr >> 0), sk->dport, \
-                    (uint8_t)(sk->saddr >> 24), (uint8_t)(sk->saddr >> 16), (uint8_t)(sk->saddr >> 8), (uint8_t)(sk->saddr >> 0), sk->sport, \
+                    (uint8_t)(sk->daddr.v4 >> 24), (uint8_t)(sk->daddr.v4 >> 16), (uint8_t)(sk->daddr.v4 >> 8), (uint8_t)(sk->daddr.v4 >> 0), sk->dport, \
+                    (uint8_t)(sk->saddr.v4 >> 24), (uint8_t)(sk->saddr.v4 >> 16), (uint8_t)(sk->saddr.v4 >> 8), (uint8_t)(sk->saddr.v4 >> 0), sk->sport, \
                     hdr->syn, hdr->ack, hdr->psh, hdr->fin, hdr->rst, hdr->seq - tcp_sk(sk)->tcb.irs, \
                     hdr->seq + skb->dlen - tcp_sk(sk)->tcb.irs,         \
                     hdr->ack_seq - tcp_sk(sk)->tcb.iss, hdr->win, tcp_sk(sk)->rto, tcp_sk(sk)->backoff); \
-    } while (0) 
+    } while (0)
 
 #define tcp_out_dbg(hdr, sk, skb)                                       \
     do {                                                                \
         print_debug("TCP %u.%u.%u.%u.%u > %u.%u.%u.%u.%u: " \
                     "Flags [S%uA%uP%uF%uR%u], seq %u:%u, ack %u, win %u rto %d boff %d", \
-                    (uint8_t)(sk->saddr >> 24), (uint8_t)(sk->saddr >> 16), (uint8_t)(sk->saddr >> 8), (uint8_t)(sk->saddr >> 0), sk->sport, \
-                    (uint8_t)(sk->daddr >> 24), (uint8_t)(sk->daddr >> 16), (uint8_t)(sk->daddr >> 8), (uint8_t)(sk->daddr >> 0), sk->dport, \
+                    (uint8_t)(sk->saddr.v4 >> 24), (uint8_t)(sk->saddr.v4 >> 16), (uint8_t)(sk->saddr.v4 >> 8), (uint8_t)(sk->saddr.v4 >> 0), sk->sport, \
+                    (uint8_t)(sk->daddr.v4 >> 24), (uint8_t)(sk->daddr.v4 >> 16), (uint8_t)(sk->daddr.v4 >> 8), (uint8_t)(sk->daddr.v4 >> 0), sk->dport, \
                     hdr->syn, hdr->ack, hdr->psh, hdr->fin, hdr->rst, hdr->seq - tcp_sk(sk)->tcb.iss, \
                     hdr->seq + skb->dlen - tcp_sk(sk)->tcb.iss,         \
                     hdr->ack_seq - tcp_sk(sk)->tcb.irs, hdr->win, tcp_sk(sk)->rto, tcp_sk(sk)->backoff); \
@@ -68,7 +68,7 @@ extern const char *tcp_dbg_states[];
         print_debug("TCP x:%u > %u.%u.%u.%u.%u (snd_una %u, snd_nxt %u, snd_wnd %u, " \
                     "snd_wl1 %u, snd_wl2 %u, rcv_nxt %u, rcv_wnd %u recv-q %d send-q %d " \
                     "rto %d boff %d) state %s: "msg, \
-                    sk->sport, (uint8_t)(sk->daddr >> 24), (uint8_t)(sk->daddr >> 16), (uint8_t)(sk->daddr >> 8), (uint8_t)(sk->daddr >> 0), \
+                    sk->sport, (uint8_t)(sk->daddr.v4 >> 24), (uint8_t)(sk->daddr.v4 >> 16), (uint8_t)(sk->daddr.v4 >> 8), (uint8_t)(sk->daddr.v4 >> 0), \
                     sk->dport, tcp_sk(sk)->tcb.snd_una - tcp_sk(sk)->tcb.iss,      \
                     tcp_sk(sk)->tcb.snd_nxt - tcp_sk(sk)->tcb.iss, tcp_sk(sk)->tcb.snd_wnd, \
                     tcp_sk(sk)->tcb.snd_wl1, tcp_sk(sk)->tcb.snd_wl2,   \
@@ -272,6 +272,7 @@ static inline struct tcphdr *tcp_hdr(const struct sk_buff *skb)
 
 void tcp_init();
 void tcp_in(struct sk_buff *skb);
+void tcp_in_v6(struct sk_buff *skb, uint8_t *payload);
 int tcp_checksum(struct tcp_sock *sock, struct tcphdr *thdr);
 void tcp_select_initial_window(uint32_t *rcv_wnd);
 
@@ -281,8 +282,11 @@ int tcp_v4_init_sock(struct sock *sk);
 int tcp_init_sock(struct sock *sk);
 void __tcp_set_state(struct sock *sk, uint32_t state);
 int tcp_v4_checksum(struct sk_buff *skb, uint32_t saddr, uint32_t daddr);
+int tcp_v6_checksum(struct sk_buff *skb, struct in6_addr *saddr, struct in6_addr *daddr);
 int tcp_v4_connect(struct sock *sk, const struct sockaddr *addr, socklen_t addrlen, int flags);
+int tcp_v6_connect(struct sock *sk, const struct sockaddr *addr, socklen_t addrlen, int flags);
 int tcp_v4_bind(struct sock *sk, const struct sockaddr *addr, socklen_t addr_len);
+int tcp_v6_bind(struct sock *sk, const struct sockaddr *addr, socklen_t addr_len);
 int tcp_v4_listen(struct sock *sk, int n);
 int tcp_v4_accept(struct sock *sk, struct sockaddr *__restrict__ addr, socklen_t *__restrict__ addr_len);
 int tcp_connect(struct sock *sk);
@@ -290,7 +294,7 @@ int tcp_disconnect(struct sock *sk, int flags);
 int tcp_write(struct sock *sk, const void *buf, int len);
 int tcp_read(struct sock *sk, void *buf, int len);
 int tcp_receive(struct tcp_sock *tsk, void *buf, int len);
-int tcp_input_state(struct sock *sk, struct tcphdr *th, struct sk_buff *skb, uint32_t saddr);
+int tcp_input_state(struct sock *sk, struct tcphdr *th, struct sk_buff *skb, void *saddr, uint8_t family);
 int tcp_send_synack(struct sock *sk);
 int tcp_send_next(struct sock *sk, int amount, uint32_t extra);
 int tcp_fast_retransmit(struct tcp_sock *tsk);

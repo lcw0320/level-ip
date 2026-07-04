@@ -327,14 +327,15 @@ static inline int tcp_discard(struct tcp_sock *tsk, struct sk_buff *skb, struct 
     return 0;
 }
 
-static inline struct tcp_sock * fork_socket(pid_t pid, struct sk_buff *skb, struct tcphdr *th, uint32_t saddr, uint16_t sport, uint32_t daddr)
+static inline struct tcp_sock * fork_socket(pid_t pid, struct sk_buff *skb, struct tcphdr *th,
+                                             uint8_t family, void *saddr, uint16_t sport, void *daddr)
 {
     int fd = -1;
     struct socket *sk = NULL;
     struct tcp_sock *tsk = NULL;
     struct tcb *tcb = NULL;
 
-    fd = _socket(pid, AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    fd = _socket(pid, family, SOCK_STREAM, IPPROTO_TCP);
     sk = get_socket(pid, fd);
     tcpsock_dbg("tcp listen recv syn, create a new socket", sk->sk);
 
@@ -360,22 +361,28 @@ static inline struct tcp_sock * fork_socket(pid_t pid, struct sk_buff *skb, stru
     tcb->snd_wl1 = 0;
     tcb->snd_wl2 = 0;
 
-    sk->sk->saddr = saddr;
+    if (family == AF_INET6) {
+        memcpy(&sk->sk->saddr.v6, saddr, sizeof(struct in6_addr));
+        memcpy(&sk->sk->daddr.v6, daddr, sizeof(struct in6_addr));
+    } else {
+        sk->sk->saddr.v4 = ntohl(*(uint32_t *)saddr);
+        sk->sk->daddr.v4 = ntohl(*(uint32_t *)daddr);
+    }
     sk->sk->sport = sport;
     sk->sk->dport = th->sport;
-    sk->sk->daddr = daddr;
 
     return tsk;
 }
 
-static int tcp_listen(struct tcp_sock *tsk, struct sk_buff *skb, struct tcphdr *th, uint32_t saddr)
+static int tcp_listen(struct tcp_sock *tsk, struct sk_buff *skb, struct tcphdr *th, void *saddr, uint8_t family)
 {
     int ret = 0;
 
-    if (th->syn) {      
+    if (th->syn) {
         // create new socket from now
-        struct tcp_sock *fork_tsk = fork_socket(tsk->sk.sock->pid, skb, th, tsk->sk.saddr, tsk->sk.sport, saddr);
-        
+        struct tcp_sock *fork_tsk = fork_socket(tsk->sk.sock->pid, skb, th,
+                                                 family, &tsk->sk.saddr, tsk->sk.sport, saddr);
+
         fork_tsk->ptsk = tsk;
 
         // send syc-ack
@@ -519,7 +526,7 @@ static void update_snd_win(struct tcp_sock *tsk, uint16_t win)
 /*
  * Follows RFC793 "Segment Arrives" section closely
  */ 
-int tcp_input_state(struct sock *sk, struct tcphdr *th, struct sk_buff *skb, uint32_t saddr)
+int tcp_input_state(struct sock *sk, struct tcphdr *th, struct sk_buff *skb, void *saddr, uint8_t family)
 {
     struct tcp_sock *tsk = tcp_sk(sk);
     struct tcb *tcb = &tsk->tcb;
@@ -530,7 +537,7 @@ int tcp_input_state(struct sock *sk, struct tcphdr *th, struct sk_buff *skb, uin
     case TCP_CLOSE:
         return tcp_closed(tsk, skb, th);
     case TCP_LISTEN:
-        return tcp_listen(tsk, skb, th, saddr);
+        return tcp_listen(tsk, skb, th, saddr, family);
     case TCP_SYN_SENT:
         return tcp_synsent(tsk, skb, th);
     }

@@ -10,7 +10,7 @@ extern struct net_ops udp_ops;
 
 int inet_stream_listen(struct socket *sock, int n);
 int inet_stream_accept(struct socket *sock, struct sockaddr *__restrict__ addr, socklen_t *__restrict__ addr_len);
-static int inet_stream_connect(struct socket *sock, const struct sockaddr *addr,
+int inet_stream_connect(struct socket *sock, const struct sockaddr *addr,
                                int addr_len, int flags);
 static int inet_dgram_connect(struct socket *sock, const struct sockaddr *addr,
                               int addr_len, int flags);
@@ -90,7 +90,8 @@ int inet_create(struct socket *sock, int protocol)
 
     sk = sk_alloc(skt->net_ops, skt->protocol);
     sk->protocol = skt->protocol;
-    
+    sk->addr_family = AF_INET;
+
     sock_init_data(sock, sk);
     
     return 0;
@@ -107,7 +108,7 @@ int inet_connect(struct socket *sock, struct sockaddr *addr,
     return 0;
 }
 
-static int inet_stream_connect(struct socket *sock, const struct sockaddr *addr,
+int inet_stream_connect(struct socket *sock, const struct sockaddr *addr,
                         int addr_len, int flags)
 {
     struct sock *sk = sock->sk;
@@ -200,8 +201,7 @@ int inet_bind(struct socket *sock, const struct sockaddr *addr,
     return sk->err;
 }
 
-int inet_stream_listen(struct socket *sock, int n)
-{
+int inet_stream_listen(struct socket *sock, int n){
     struct sock *sk = sock->sk;
     
     if ((n < 0) || (n > 100)) {
@@ -238,7 +238,7 @@ static int inet_dgram_connect(struct socket *sock, const struct sockaddr *addr,
         return -EINVAL;
     }
 
-    sk->daddr = ntohl(sin->sin_addr.s_addr);
+    sk->daddr.v4 = ntohl(sin->sin_addr.s_addr);
     sk->dport = ntohs(sin->sin_port);
     sock->state = SS_CONNECTED; // 可选，表示已“连接”
 
@@ -277,9 +277,9 @@ int inet_read(struct socket *sock, void *buf, int len)
 
 struct sock *inet_lookup(struct sk_buff *skb, uint32_t saddr, uint32_t daddr, uint16_t sport, uint16_t dport)
 {
-    struct socket *sock = socket_lookup(saddr, daddr, sport, dport);
+    struct socket *sock = socket_lookup(AF_INET, saddr, daddr, NULL, NULL, sport, dport);
     if (sock == NULL) return NULL;
-    
+
     return sock->sk;
 }
 
@@ -326,7 +326,7 @@ int inet_getpeername(struct socket *sock, struct sockaddr *restrict address,
     struct sockaddr_in *res = (struct sockaddr_in *) address;
     res->sin_family = AF_INET;
     res->sin_port = htons(sk->dport);
-    res->sin_addr.s_addr = htonl(sk->daddr);
+    res->sin_addr.s_addr = htonl(sk->daddr.v4);
     *address_len = sizeof(struct sockaddr_in);
 
     inet_dbg(sock, "geetpeername sin_family %d sin_port %d sin_addr %d addrlen %d",
@@ -346,7 +346,7 @@ int inet_getsockname(struct socket *sock, struct sockaddr *restrict address,
     struct sockaddr_in *res = (struct sockaddr_in *) address;
     res->sin_family = AF_INET;
     res->sin_port = htons(sk->sport);
-    res->sin_addr.s_addr = htonl(sk->saddr);
+    res->sin_addr.s_addr = htonl(sk->saddr.v4);
     *address_len = sizeof(struct sockaddr_in);
 
     inet_dbg(sock, "getsockname sin_family %d sin_port %d sin_addr %d addrlen %d",

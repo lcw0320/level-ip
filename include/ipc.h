@@ -56,16 +56,25 @@ struct ipc_socket {
     int protocol;
 } __attribute__((packed));
 
+/*
+ * struct ipc_sockaddr - sockaddr storage large enough for sockaddr_in6 (28 bytes)
+ *
+ * The standard struct sockaddr (16 bytes) cannot hold a sockaddr_in6.
+ * This struct provides 28 bytes of sa_data plus a length field.
+ */
+struct ipc_sockaddr {
+    uint8_t sa_data[28];
+    socklen_t sa_len;
+} __attribute__((packed));
+
 struct ipc_connect {
     int sockfd;
-    struct sockaddr addr;
-    socklen_t addrlen;
+    struct ipc_sockaddr addr;
 } __attribute__((packed));
 
 struct ipc_bind {
     int sockfd;
-    struct sockaddr addr;
-    socklen_t addrlen;
+    struct ipc_sockaddr addr;
 } __attribute__((packed));
 
 struct ipc_listen {
@@ -75,7 +84,7 @@ struct ipc_listen {
 
 struct ipc_accept {
     int sockfd;
-    struct sockaddr addr;
+    struct ipc_sockaddr addr;
     socklen_t addr_len;
 } __attribute__((packed));
 
@@ -83,8 +92,7 @@ struct ipc_sendto {
     int sockfd;
     size_t len;
     int flags;
-    struct sockaddr addr;
-    socklen_t addrlen;
+    struct ipc_sockaddr addr;
     uint8_t buf[];
 } __attribute__((packed));
 

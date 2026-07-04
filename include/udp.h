@@ -25,7 +25,7 @@
 #define udpsock_dbg(msg, sk)                                            \
     do {                                                                \
         print_debug("UDP x:%u > %u.%u.%u.%u.%u %s: "msg, \
-                    sk->sport, (uint8_t)(sk->daddr >> 24), (uint8_t)(sk->daddr >> 16), (uint8_t)(sk->daddr >> 8), (uint8_t)(sk->daddr >> 0), \
+                    sk->sport, (uint8_t)(sk->daddr.v4 >> 24), (uint8_t)(sk->daddr.v4 >> 16), (uint8_t)(sk->daddr.v4 >> 8), (uint8_t)(sk->daddr.v4 >> 0), \
                     sk->dport);                         \
     } while (0)
 #else

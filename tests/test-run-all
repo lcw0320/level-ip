@@ -30,6 +30,8 @@ pids="$pids $!"
 pids="$pids $!"
 ./suites/tcp/suite-packet-loss &
 pids="$pids $!"
+./suites/ipv6/suite-ipv6 &
+pids="$pids $!"
 
 rc=0
 for i in $pids; do

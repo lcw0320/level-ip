@@ -17,7 +17,7 @@ int ip_output(struct sock *sk, struct sk_buff *skb)
     struct rtentry *rt;
     struct iphdr *ihdr = ip_hdr(skb);
 
-    rt = route_lookup(sk->daddr);
+    rt = route_lookup(sk->daddr.v4);
 
     if (!rt) {
         // TODO: dest_unreachable
@@ -39,7 +39,7 @@ int ip_output(struct sock *sk, struct sk_buff *skb)
     ihdr->ttl = 64;
     ihdr->proto = skb->protocol;
     ihdr->saddr = skb->dev->addr;
-    ihdr->daddr = sk->daddr;
+    ihdr->daddr = sk->daddr.v4;
     ihdr->csum = 0;
 
     ip_dbg("out", ihdr);

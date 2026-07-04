@@ -10,3 +10,4 @@ apps/udp/udp_server
 apps/curl/curl
 tools/liblevelip.so
 .claude/
+tools/test.txt

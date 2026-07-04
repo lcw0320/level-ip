@@ -47,7 +47,7 @@ void icmpv4_reply(struct sk_buff *skb)
     icmp->csum = checksum(icmp, icmp_len, 0);
 
     skb->protocol = ICMPV4;
-    sk.daddr = iphdr->saddr;
+    sk.daddr.v4 = iphdr->saddr;
 
     ip_output(&sk, skb);
     free_skb(skb);
