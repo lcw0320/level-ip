@@ -212,7 +212,7 @@ int udp_bind(struct sock *sk, const struct sockaddr *addr, socklen_t addr_len)
         return ret;
     }
     usk->sk.sport = sport;
-    usk->sk.saddr = saddr;
+    usk->sk.saddr.v4 = saddr;
 
     return ret;
 }
@@ -228,7 +228,7 @@ int udp_sendto(struct sock *sk, const void *buf, int len, int flags, const struc
     uint32_t daddr = ((struct sockaddr_in *)addr)->sin_addr.s_addr;
 
     usk->sk.dport = ntohs(dport);
-    usk->sk.daddr = ntohl(daddr);
+    usk->sk.daddr.v4 = ntohl(daddr);
 
     return udp_out_send(usk, buf, len);    
 

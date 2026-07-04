@@ -64,7 +64,7 @@ static inline struct lvlip_sock *lvlip_get_sock(int fd) {
 
 static int is_socket_supported(int domain, int type, int protocol)
 {
-    if (domain != AF_INET) return 0;
+    if (domain != AF_INET && domain != AF_INET6) return 0;
 
     if (!((type & SOCK_STREAM) || (type & SOCK_DGRAM))) return 0;
 
@@ -241,11 +241,11 @@ int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen)
     msg->type = IPC_CONNECT;
     msg->pid = pid;
 
-    struct ipc_connect payload = {
-        .sockfd = sockfd,
-        .addr = *addr,
-        .addrlen = addrlen
-    };
+    struct ipc_connect payload;
+    memset(&payload, 0, sizeof(payload));
+    payload.sockfd = sockfd;
+    memcpy(payload.addr.sa_data, addr, addrlen);
+    payload.addr.sa_len = addrlen;
 
     memcpy(msg->data, &payload, sizeof(struct ipc_connect));
 
@@ -271,11 +271,11 @@ int bind(int sockfd, const struct sockaddr *addr,
     msg->type = IPC_BIND;
     msg->pid = pid;
 
-    struct ipc_bind payload = {
-        .sockfd = sockfd,
-        .addr = *addr,
-        .addrlen = addrlen
-    };
+    struct ipc_bind payload;
+    memset(&payload, 0, sizeof(payload));
+    payload.sockfd = sockfd;
+    memcpy(payload.addr.sa_data, addr, addrlen);
+    payload.addr.sa_len = addrlen;
 
     memcpy(msg->data, &payload, sizeof(struct ipc_bind));
 
@@ -330,13 +330,14 @@ int accept(int sockfd, struct sockaddr *__restrict__ addr, socklen_t *__restrict
     msg->type = IPC_ACCEPT;
     msg->pid = pid;
 
-    struct ipc_accept payload = {
-        .sockfd = sockfd,
-        .addr = *addr,
-        .addr_len = *addr_len
-    };
+    struct ipc_accept payload;
+    memset(&payload, 0, sizeof(payload));
+    payload.sockfd = sockfd;
+    memcpy(payload.addr.sa_data, addr, *addr_len);
+    payload.addr.sa_len = *addr_len;
+    payload.addr_len = *addr_len;
 
-    memcpy(msg->data, &payload, sizeof(struct ipc_listen));
+    memcpy(msg->data, &payload, sizeof(struct ipc_accept));
 
     // Send mocked syscall to lvl-ip
     if (_write(sock->lvlfd, (char *)msg, msglen) == -1) {
@@ -369,7 +370,10 @@ int accept(int sockfd, struct sockaddr *__restrict__ addr, socklen_t *__restrict
 
     struct ipc_accept *data = (struct ipc_accept *) error->data;
 
-    memcpy(addr, &data->addr, sizeof(struct sockaddr));
+    memcpy(addr, data->addr.sa_data, data->addr.sa_len);
+    if (addr_len != NULL) {
+        *addr_len = data->addr.sa_len;
+    }
 
     int lvlfd = init_socket("/tmp/lvlip.socket");
     sock = lvlip_alloc();
@@ -405,13 +409,13 @@ ssize_t sendto(int sockfd, const void *buf, size_t len,
     msg->type = IPC_SENDTO;
     msg->pid = pid;
 
-    struct ipc_sendto payload = {
-        .sockfd = sockfd,
-        .len = len,
-        .flags = flags,
-        .addr = *dest_addr,
-        .addrlen = dest_len
-    };
+    struct ipc_sendto payload;
+    memset(&payload, 0, sizeof(payload));
+    payload.sockfd = sockfd;
+    payload.len = len;
+    payload.flags = flags;
+    memcpy(payload.addr.sa_data, dest_addr, dest_len);
+    payload.addr.sa_len = dest_len;
 
     memcpy(msg->data, &payload, sizeof(struct ipc_sendto));
     memcpy(((struct ipc_sendto *)msg->data)->buf, buf, len);

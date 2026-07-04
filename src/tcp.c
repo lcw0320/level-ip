@@ -6,6 +6,10 @@
 #include "utils.h"
 #include "timer.h"
 #include "wait.h"
+#include "ipv6.h"
+#include "inet6.h"
+#include "netdev.h"
+#include "route.h"
 
 #ifdef DEBUG_TCP
 const char *tcp_dbg_states[] = {
@@ -36,7 +40,7 @@ void tcp_init()
     
 }
 
-static void tcp_init_segment(struct tcphdr *th, struct iphdr *ih, struct sk_buff *skb)
+static void tcp_init_segment(struct tcphdr *th, int tcp_dlen, struct sk_buff *skb)
 {
     th->sport = ntohs(th->sport);
     th->dport = ntohs(th->dport);
@@ -47,7 +51,7 @@ static void tcp_init_segment(struct tcphdr *th, struct iphdr *ih, struct sk_buff
     th->urp = ntohs(th->urp);
 
     skb->seq = th->seq;
-    skb->dlen = ip_len(ih) - tcp_hlen(th);
+    skb->dlen = tcp_dlen;
     skb->len = skb->dlen + th->syn + th->fin;
     skb->end_seq = skb->seq + skb->dlen;
     skb->payload = th->data;
@@ -62,12 +66,14 @@ void tcp_in(struct sk_buff *skb)
     struct sock *sk;
     struct iphdr *iph;
     struct tcphdr *th;
+    int tcp_dlen = 0;
 
     iph = ip_hdr(skb);
     th = (struct tcphdr*) iph->data;
 
-    tcp_init_segment(th, iph, skb);
-    
+    tcp_dlen = ip_len(iph) - tcp_hlen(th);
+    tcp_init_segment(th, tcp_dlen, skb);
+
     sk = inet_lookup(skb, iph->saddr, iph->daddr, th->sport, th->dport);
 
     if (sk == NULL) {
@@ -82,7 +88,50 @@ void tcp_in(struct sk_buff *skb)
     /* if (tcp_checksum(iph, th) != 0) { */
     /*     goto discard; */
     /* } */
-    tcp_input_state(sk, th, skb, iph->saddr);
+    tcp_input_state(sk, th, skb, &iph->saddr, sk->addr_family);
+
+    socket_release(sk->sock);
+}
+
+/*
+ * tcp_in_v6 - TCP IPv6 receive entry point (04 §3.4.12)
+ * @skb:     packet buffer (ownership transferred)
+ * @payload: first byte of the TCP segment (after IPv6 + ext headers)
+ */
+void tcp_in_v6(struct sk_buff *skb, uint8_t *payload)
+{
+    struct ipv6hdr *ip6h = NULL;
+    struct tcphdr *th = NULL;
+    struct sock *sk = NULL;
+    struct in6_addr saddr;
+    struct in6_addr daddr;
+    int tcp_dlen = 0;
+
+    ip6h = ipv6_hdr(skb);
+    th = (struct tcphdr *)payload;
+
+    /* Copy addresses to local vars to avoid packed-member alignment issues */
+    memcpy(&saddr, ip6h->saddr, sizeof(struct in6_addr));
+    memcpy(&daddr, ip6h->daddr, sizeof(struct in6_addr));
+
+    /* TCP data length = IPv6 payload_len - ext headers consumed - TCP header */
+    tcp_dlen = ntohs(ip6h->payload_len) - (uint32_t)(payload - (uint8_t *)(ip6h + 1)) - tcp_hlen(th);
+    tcp_init_segment(th, tcp_dlen, skb);
+
+    sk = inet6_lookup(skb, &saddr, &daddr, th->sport, th->dport);
+
+    if (sk == NULL) {
+        print_err("No TCP socket for sport %d dport %d (IPv6)\n",
+                  th->sport, th->dport);
+        free_skb(skb);
+        return;
+    }
+
+    socket_wr_acquire(sk->sock);
+
+    tcp_in_dbg(th, sk, skb);
+
+    tcp_input_state(sk, th, skb, &saddr, sk->addr_family);
 
     socket_release(sk->sock);
 }
@@ -103,6 +152,32 @@ int tcp_udp_checksum(uint32_t saddr, uint32_t daddr, uint8_t proto,
 int tcp_v4_checksum(struct sk_buff *skb, uint32_t saddr, uint32_t daddr)
 {
     return tcp_udp_checksum(saddr, daddr, IP_TCP, skb->data, skb->len);
+}
+
+/*
+ * tcp_v6_checksum - TCP IPv6 pseudo-header checksum (RFC 8200 §8.1)
+ * @saddr: source IPv6 address
+ * @daddr: destination IPv6 address
+ * @skb:   packet buffer (skb->data = TCP header + payload, skb->len = TCP total length)
+ *
+ * Pseudo-header format is identical to ICMPv6:
+ *   Source Address       : 128 bits
+ *   Destination Address  : 128 bits
+ *   Upper-Layer Length   : 32 bits
+ *   Zero (3 bytes) + NH  : 8 bits  (TCP = 6)
+ */
+int tcp_v6_checksum(struct sk_buff *skb, struct in6_addr *saddr,
+                    struct in6_addr *daddr)
+{
+    uint32_t sum = 0;
+
+    sum += sum_every_16bits(saddr->s6_addr, 16);
+    sum += sum_every_16bits(daddr->s6_addr, 16);
+    sum += htons((uint16_t)(skb->len >> 16));
+    sum += htons((uint16_t)(skb->len & 0xFFFF));
+    sum += htons(IP_TCP);
+
+    return checksum(skb->data, skb->len, sum);
 }
 
 struct sock *tcp_alloc_sock()
@@ -173,11 +248,70 @@ int tcp_v4_connect(struct sock *sk, const struct sockaddr *addr, socklen_t addrl
 
     sk->dport = ntohs(dport);
     sk->sport = generate_port();
-    sk->daddr = ntohl(daddr);
+    sk->daddr.v4 = ntohl(daddr);
     /* TODO: Do not hardcode lvl-ip local interface */
-    sk->saddr = parse_ipv4_string("10.0.0.4"); 
+    sk->saddr.v4 = parse_ipv4_string("10.0.0.4");
 
     return tcp_connect(sk);
+}
+
+/*
+ * tcp_v6_connect - TCP IPv6 connect (04 §3.6)
+ * @sk:      socket
+ * @addr:    sockaddr_in6 destination
+ * @addrlen: address length
+ * @flags:   connect flags (unused)
+ */
+int tcp_v6_connect(struct sock *sk, const struct sockaddr *addr, socklen_t addrlen, int flags)
+{
+    struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)addr;
+    struct rtentry *rt = NULL;
+    struct tcp_sock *tsk = NULL;
+    uint16_t pmtu = 0;
+
+    if (addrlen < sizeof(struct sockaddr_in6) || addr->sa_family != AF_INET6) {
+        return -EINVAL;
+    }
+
+    sk->dport = ntohs(sin6->sin6_port);
+    sk->sport = generate_port();
+    memcpy(&sk->daddr.v6, &sin6->sin6_addr, sizeof(struct in6_addr));
+
+    /* TODO: proper source address selection (routing-based) */
+    memset(&sk->saddr.v6, 0, sizeof(struct in6_addr));
+
+    /* Adjust MSS for IPv6: PMTU - 60 (40 IPv6 + 20 TCP) */
+    tsk = tcp_sk(sk);
+    rt = route6_lookup(&sk->daddr.v6);
+    if (rt != NULL && rt->pmtu > 0) {
+        pmtu = rt->pmtu;
+    } else if (rt != NULL && rt->dev != NULL) {
+        pmtu = (uint16_t)(rt->dev->mtu6 > 0 ? rt->dev->mtu6 : rt->dev->mtu);
+    } else {
+        pmtu = 1500;
+    }
+
+    tsk->smss = pmtu - 60;
+    tsk->rmss = pmtu - 60;
+
+    return tcp_connect(sk);
+}
+
+/*
+ * tcp_v6_bind - TCP IPv6 bind
+ */
+int tcp_v6_bind(struct sock *sk, const struct sockaddr *addr, socklen_t addr_len)
+{
+    struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)addr;
+
+    if (addr_len < sizeof(struct sockaddr_in6) || addr->sa_family != AF_INET6) {
+        return -EINVAL;
+    }
+
+    sk->sport = ntohs(sin6->sin6_port);
+    memcpy(&sk->saddr.v6, &sin6->sin6_addr, sizeof(struct in6_addr));
+
+    return 0;
 }
 
 int tcp_disconnect(struct sock *sk, int flags)
@@ -191,7 +325,7 @@ int tcp_v4_bind(struct sock *sk, const struct sockaddr *addr, socklen_t addr_len
     uint32_t saddr = sockaddr_addr(addr);
 
     sk->sport = ntohs(sport);
-    sk->saddr = ntohl(saddr);
+    sk->saddr.v4 = ntohl(saddr);
 
     return 0;
 }
@@ -257,7 +391,7 @@ int tcp_v4_accept(struct sock *sk, struct sockaddr *__restrict__ addr, socklen_t
     int fd = get_established_conn_fd(tsk);
     struct socket *sock = get_socket(tsk->sk.sock->pid, fd);
 
-    build_sockaddr_from_host_order(sock->sk->dport, sock->sk->daddr, addr, addr_len);
+    build_sockaddr_from_host_order(sock->sk->dport, sock->sk->daddr.v4, addr, addr_len);
 
     return fd;
 }

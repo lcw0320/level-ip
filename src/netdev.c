@@ -5,6 +5,7 @@
 #include "ethernet.h"
 #include "arp.h"
 #include "ip.h"
+#include "ipv6.h"
 #include "tuntap_if.h"
 #include "basic.h"
 
@@ -15,6 +16,8 @@ extern int running;
 static struct netdev *netdev_alloc(char *addr, char *hwaddr, uint32_t mtu)
 {
     struct netdev *dev = malloc(sizeof(struct netdev));
+
+    memset(dev, 0, sizeof(struct netdev));
 
     dev->addr = ip_parse(addr);
 
@@ -27,6 +30,7 @@ static struct netdev *netdev_alloc(char *addr, char *hwaddr, uint32_t mtu)
 
     dev->addr_len = 6;
     dev->mtu = mtu;
+    dev->mtu6 = mtu;
 
     return dev;
 }
@@ -74,6 +78,8 @@ static int netdev_receive(struct sk_buff *skb)
             ip_rcv(skb);
             break;
         case ETH_P_IPV6:
+            ipv6_rcv(skb);
+            break;
         default:
             printf("Unsupported ethertype %x\n", hdr->ethertype);
             free_skb(skb);
@@ -86,13 +92,18 @@ static int netdev_receive(struct sk_buff *skb)
 void *netdev_rx_loop()
 {
     while (running) {
-        struct sk_buff *skb = alloc_skb(BUFLEN);
-        
-        if (tun_read((char *)skb->data, BUFLEN) < 0) { 
+        struct sk_buff *skb = NULL;
+        int ret = 0;
+
+        skb = alloc_skb(BUFLEN);
+
+        ret = tun_read((char *)skb->data, BUFLEN);
+        if (ret < 0) {
             perror("ERR: Read from tun_fd");
             free_skb(skb);
             return NULL;
         }
+        skb->len = (unsigned int)ret;
 
         netdev_receive(skb);
     }

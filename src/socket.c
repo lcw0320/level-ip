@@ -5,15 +5,18 @@
 #include "inet.h"
 #include "wait.h"
 #include "timer.h"
+#include "ipv6.h"
 
 static int sock_amount = 0;
 static LIST_HEAD(sockets);
 static pthread_rwlock_t slock = PTHREAD_RWLOCK_INITIALIZER;
 
 extern struct net_family inet;
+extern struct net_family inet6;
 
 static struct net_family *families[128] = {
     [AF_INET] = &inet,
+    [AF_INET6] = &inet6,
 };
 
 static struct socket *alloc_socket(pid_t pid)
@@ -121,6 +124,50 @@ void abort_sockets() {
     }
 }
 
+/*
+ * socket_adjust_pmtu6 - Update TCP MSS for IPv6 sockets matching daddr.
+ * @daddr: destination IPv6 address from PMTUD update
+ * @pmtu:  new path MTU value (host byte order)
+ *
+ * Iterates all sockets and adjusts smss/rmss for IPv6 TCP sockets
+ * whose destination matches daddr.  Called from ICMPv6 PMTUD path.
+ */
+void socket_adjust_pmtu6(const struct in6_addr *daddr, uint16_t pmtu)
+{
+    struct list_head *item = NULL;
+    struct socket *sock = NULL;
+    struct tcp_sock *tsk = NULL;
+    uint16_t new_mss = 0;
+
+    new_mss = pmtu - 60;  /* 40 IPv6 + 20 TCP */
+
+    pthread_rwlock_rdlock(&slock);
+    list_for_each(item, &sockets) {
+        sock = list_entry(item, struct socket, list);
+        if (sock->sk == NULL) {
+            continue;
+        }
+        if (sock->sk->addr_family != AF_INET6) {
+            continue;
+        }
+        if (sock->sk->protocol != IP_TCP) {
+            continue;
+        }
+        if (!ipv6_addr_equal(&sock->sk->daddr.v6, daddr)) {
+            continue;
+        }
+
+        tsk = tcp_sk(sock->sk);
+        if (new_mss < tsk->smss) {
+            print_debug("PMTU: adjusting MSS %u -> %u for port %u\n",
+                        tsk->smss, new_mss, sock->sk->dport);
+            tsk->smss = new_mss;
+            tsk->rmss = new_mss;
+        }
+    }
+    pthread_rwlock_unlock(&slock);
+}
+
 struct socket *get_socket(pid_t pid, uint32_t fd)
 {
     struct list_head *item;
@@ -139,34 +186,45 @@ out:
     return sock;
 }
 
-struct socket *socket_lookup(uint32_t remotesaddr, uint32_t localsaddr, uint16_t remoteport, uint16_t localport)
+struct socket *socket_lookup(uint8_t family, uint32_t remotesaddr, uint32_t localsaddr,
+                             const struct in6_addr *remote6, const struct in6_addr *local6,
+                             uint16_t remoteport, uint16_t localport)
 {
     struct list_head *item;
     struct socket *sock = NULL;
     struct sock *sk = NULL;
 
     pthread_rwlock_rdlock(&slock);
-    
+
     list_for_each(item, &sockets) {
         sock = list_entry(item, struct socket, list);
 
         if (sock == NULL || sock->sk == NULL) continue;
         sk = sock->sk;
 
-        print_debug("find no listen socket socket, daddr: %d.%d.%d.%d, socket sport: %u, socket dport: %u, socket protocol: %u, remotesaddr: %d.%d.%d.%d, remoteport: %u, localport: %u\n",
-           (sk->daddr >> 24) & 0xFF, (sk->daddr >> 16) & 0xFF, (sk->daddr >> 8) & 0xFF, sk->daddr & 0xFF,
-           sk->sport, sk->dport, sk->protocol,
-           (remotesaddr >> 24) & 0xFF, (remotesaddr >> 16) & 0xFF, (remotesaddr >> 8) & 0xFF, remotesaddr & 0xFF,
-           remoteport, localport);
+        /* Filter by address family first */
+        if (sk->addr_family != family) continue;
+
         switch (sk->protocol) {
         case IPPROTO_TCP:
-            // tcp socket need to find from established or half conn list first, then find from listen state
-            if ((sk->state != TCP_LISTEN) && (sk->sport == localport && sk->dport == remoteport && sk->daddr == remotesaddr && sk->saddr == localsaddr)) {
-                goto found;
+            if (sk->state != TCP_LISTEN) {
+                if (family == AF_INET6) {
+                    if (sk->sport == localport && sk->dport == remoteport &&
+                        remote6 != NULL && local6 != NULL &&
+                        memcmp(&sk->daddr.v6, remote6, sizeof(struct in6_addr)) == 0 &&
+                        memcmp(&sk->saddr.v6, local6, sizeof(struct in6_addr)) == 0) {
+                        goto found;
+                    }
+                } else {
+                    if (sk->sport == localport && sk->dport == remoteport &&
+                        sk->daddr.v4 == remotesaddr && sk->saddr.v4 == localsaddr) {
+                        goto found;
+                    }
+                }
             }
             break;
         case IPPROTO_UDP:
-            if (sk->sport == localport) {
+            if (family != AF_INET6 && sk->sport == localport) {
                 goto found;
             }
             break;
@@ -175,18 +233,29 @@ struct socket *socket_lookup(uint32_t remotesaddr, uint32_t localsaddr, uint16_t
         }
     }
 
+    /* Fall back to LISTEN sockets */
     list_for_each(item, &sockets) {
         sock = list_entry(item, struct socket, list);
 
         if (sock == NULL || sock->sk == NULL) continue;
         sk = sock->sk;
 
-        print_debug("find from listen socket, socket sport: %u, socket dport: %u, socket protocol: %u, remoteport: %u, localport: %u\n",
-           sk->sport, sk->dport, sk->protocol, remoteport, localport);
+        if (sk->addr_family != family) continue;
+
         switch (sk->protocol) {
         case IPPROTO_TCP:
-            if (sk->state == TCP_LISTEN && (sk->sport == localport) && (sk->saddr == localsaddr)) {
-                goto found;
+            if (sk->state == TCP_LISTEN && sk->sport == localport) {
+                if (family == AF_INET6) {
+                    /* IPv6 LISTEN: match local address if specified */
+                    if (local6 == NULL || ipv6_addr_is_unspecified(local6) ||
+                        memcmp(&sk->saddr.v6, local6, sizeof(struct in6_addr)) == 0) {
+                        goto found;
+                    }
+                } else {
+                    if (sk->saddr.v4 == localsaddr) {
+                        goto found;
+                    }
+                }
             }
             break;
         default:

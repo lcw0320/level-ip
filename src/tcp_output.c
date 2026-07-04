@@ -2,6 +2,7 @@
 #include "utils.h"
 #include "tcp.h"
 #include "ip.h"
+#include "ipv6.h"
 #include "skbuff.h"
 #include "timer.h"
 
@@ -139,8 +140,17 @@ static int tcp_transmit_skb(struct sock *sk, struct sk_buff *skb, uint32_t seq)
     thdr->win = htons(thdr->win);
     thdr->csum = htons(thdr->csum);
     thdr->urp = htons(thdr->urp);
-    thdr->csum = tcp_v4_checksum(skb, htonl(sk->saddr), htonl(sk->daddr));
-    
+
+    if (sk->addr_family == AF_INET6) {
+        /* IPv6 path: tcp_v6_checksum + ipv6_output */
+        thdr->csum = 0;
+        thdr->csum = tcp_v6_checksum(skb, &sk->saddr.v6, &sk->daddr.v6);
+        return ipv6_output(skb, NEXTHDR_TCP, &sk->saddr.v6, &sk->daddr.v6);
+    }
+
+    /* IPv4 path (original logic) */
+    thdr->csum = tcp_v4_checksum(skb, htonl(sk->saddr.v4), htonl(sk->daddr.v4));
+
     return ip_output(sk, skb);
 }
 

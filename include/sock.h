@@ -42,8 +42,16 @@ struct sock {
     short int poll_events;
     uint16_t sport;
     uint16_t dport;
-    uint32_t saddr;
-    uint32_t daddr;
+    uint8_t addr_family;             /* AF_INET or AF_INET6 */
+    uint8_t _pad;                    /* alignment padding */
+    union {
+        uint32_t v4;
+        struct in6_addr v6;
+    } saddr;
+    union {
+        uint32_t v4;
+        struct in6_addr v6;
+    } daddr;
 };
 
 static inline struct sk_buff *write_queue_head(struct sock *sk)

@@ -160,10 +160,11 @@ static int ipc_connect(int sockfd, struct ipc_msg *msg)
     struct ipc_connect *payload = (struct ipc_connect *)msg->data;
     pid_t pid = msg->pid;
     int rc = -1;
-    struct sockaddr temp_addr;
+    uint8_t temp_addr[sizeof(struct sockaddr_in6)];
 
-    memcpy(&temp_addr, &payload->addr, payload->addrlen);
-    rc = _connect(pid, payload->sockfd, &temp_addr, payload->addrlen);
+    memset(temp_addr, 0, sizeof(temp_addr));
+    memcpy(temp_addr, payload->addr.sa_data, payload->addr.sa_len);
+    rc = _connect(pid, payload->sockfd, (struct sockaddr *)temp_addr, payload->addr.sa_len);
 
     return ipc_write_rc(sockfd, pid, IPC_CONNECT, rc);
 }
@@ -173,10 +174,11 @@ static int ipc_bind(int sockfd, struct ipc_msg *msg)
     struct ipc_bind *payload = (struct ipc_bind *)msg->data;
     pid_t pid = msg->pid;
     int rc = -1;
-    struct sockaddr temp_addr;
+    uint8_t temp_addr[sizeof(struct sockaddr_in6)];
 
-    memcpy(&temp_addr, &payload->addr, payload->addrlen);
-    rc = _bind(pid, payload->sockfd, &temp_addr, payload->addrlen);
+    memset(temp_addr, 0, sizeof(temp_addr));
+    memcpy(temp_addr, payload->addr.sa_data, payload->addr.sa_len);
+    rc = _bind(pid, payload->sockfd, (struct sockaddr *)temp_addr, payload->addr.sa_len);
 
     return ipc_write_rc(sockfd, pid, IPC_BIND, rc);
 }
@@ -196,13 +198,14 @@ static int ipc_accept(int sockfd, struct ipc_msg *msg)
 {
     struct ipc_accept *payload = (struct ipc_accept*)msg->data;
     pid_t pid = msg->pid;
-    struct sockaddr addr = {0};
+    uint8_t addr[sizeof(struct sockaddr_in6)];
     socklen_t addr_len = payload->addr_len;
     int rc = -1;
 
-    memcpy(&addr, &payload->addr, sizeof(struct sockaddr));
-    
-    rc = _accept(pid, payload->sockfd, &addr, addr_len);
+    memset(addr, 0, sizeof(addr));
+    memcpy(addr, payload->addr.sa_data, payload->addr.sa_len);
+
+    rc = _accept(pid, payload->sockfd, (struct sockaddr *)addr, addr_len);
 
     int resplen = sizeof(struct ipc_msg) + sizeof(struct ipc_err) + sizeof(struct ipc_accept);
     struct ipc_msg *response = alloca(resplen);
@@ -213,7 +216,7 @@ static int ipc_accept(int sockfd, struct ipc_msg *msg)
         print_err("Could not allocate memory for IPC read response\n");
         return -1;
     }
-    
+
     response->type = IPC_ACCEPT;
     response->pid = pid;
 
@@ -221,7 +224,9 @@ static int ipc_accept(int sockfd, struct ipc_msg *msg)
     error->err = rc;
 
     actual->sockfd = rc;
-    memcpy(&actual->addr, &addr, sizeof(struct sockaddr));
+    memset(&actual->addr, 0, sizeof(struct ipc_sockaddr));
+    memcpy(actual->addr.sa_data, addr, addr_len);
+    actual->addr.sa_len = addr_len;
     memcpy(&actual->addr_len, &addr_len, sizeof(socklen_t));
 
     if (ipc_try_send(sockfd, (char *)response, resplen) == -1) {
@@ -236,10 +241,12 @@ static int ipc_sendto(int sockfd, struct ipc_msg *msg)
     struct ipc_sendto *payload = (struct ipc_sendto *)msg->data;
     pid_t pid = msg->pid;
     int rc = -1;
-    struct sockaddr temp_addr;
+    uint8_t temp_addr[sizeof(struct sockaddr_in6)];
 
-    memcpy(&temp_addr, &payload->addr, payload->addrlen);
-    rc = _sendto(pid, payload->sockfd, (void*)payload->buf, payload->len, payload->flags, &temp_addr, payload->addrlen);
+    memset(temp_addr, 0, sizeof(temp_addr));
+    memcpy(temp_addr, payload->addr.sa_data, payload->addr.sa_len);
+    rc = _sendto(pid, payload->sockfd, (void*)payload->buf, payload->len, payload->flags,
+                 (struct sockaddr *)temp_addr, payload->addr.sa_len);
 
     return ipc_write_rc(sockfd, pid, IPC_SENDTO, rc);
 }

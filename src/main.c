@@ -11,6 +11,8 @@
 #include "tcp.h"
 #include "netdev.h"
 #include "ip.h"
+#include "ndp.h"
+#include "ipv6_addrconf.h"
 
 #define MAX_CMD_LENGTH 6
 
@@ -78,6 +80,8 @@ static void init_stack()
     route_init();
     arp_init();
     tcp_init();
+    ndp_init();
+    ipv6_addrconf_init();
 }
 
 static void run_threads()
