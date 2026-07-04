@@ -162,28 +162,35 @@ uint16_t icmpv6_checksum(struct in6_addr *saddr, struct in6_addr *daddr,
                          uint8_t *data, uint16_t len)
 {
     uint32_t sum = 0;
-
     /*
-     * IPv6 pseudo-header (RFC 8200 §8.1):
-     *   Source Address       : 128 bits
-     *   Destination Address  : 128 bits
-     *   Upper-Layer Length   : 32 bits
-     *   Zero (3 bytes) + NH  : 8 bits  (ICMPv6 = 58)
+     * Build the IPv6 pseudo-header in a buffer (network byte order)
+     * and compute its checksum with sum_every_16bits.  This avoids
+     * endianness pitfalls with adding host-order values.
+     *
+     * Pseudo-header layout (40 bytes, RFC 8200 §8.1):
+     *   Source Address       : 16 bytes
+     *   Destination Address  : 16 bytes
+     *   Upper-Layer Length   :  4 bytes (network order)
+     *   Zeros (3 bytes) + NH :  4 bytes
      */
+    uint8_t pseudo[40];
 
-    /* accumulate source address (16 bytes = 8 x 16-bit words) */
-    sum += sum_every_16bits(saddr->s6_addr, 16);
+    memset(pseudo, 0, sizeof(pseudo));
+    memcpy(pseudo, saddr->s6_addr, 16);
+    memcpy(pseudo + 16, daddr->s6_addr, 16);
+    /* Upper-layer length at offset 32 (4 bytes, network order) */
+    pseudo[32] = (uint8_t)(len >> 24);
+    pseudo[33] = (uint8_t)(len >> 16);
+    pseudo[34] = (uint8_t)(len >> 8);
+    pseudo[35] = (uint8_t)(len & 0xFF);
+    /* pseudo[36..38] = 0 (zeros) */
+    /* Next header at offset 39 */
+    pseudo[39] = NEXTHDR_ICMPV6;
 
-    /* accumulate destination address */
-    sum += sum_every_16bits(daddr->s6_addr, 16);
+    /* Sum pseudo-header (40 bytes = 20 x 16-bit words) */
+    sum += sum_every_16bits(pseudo, 40);
 
-    /* accumulate upper-layer packet length (32-bit, high 16 bits are 0) */
-    sum += htons(len);
-
-    /* accumulate next header (ICMPv6 = 58) */
-    sum += htons(NEXTHDR_ICMPV6);
-
-    /* accumulate ICMPv6 message data and fold */
+    /* Sum ICMPv6 message and fold */
     return checksum(data, len, sum);
 }
 
