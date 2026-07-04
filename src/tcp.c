@@ -170,12 +170,21 @@ int tcp_v6_checksum(struct sk_buff *skb, struct in6_addr *saddr,
                     struct in6_addr *daddr)
 {
     uint32_t sum = 0;
+    uint32_t len = 0;
+    uint8_t pseudo[40];
 
-    sum += sum_every_16bits(saddr->s6_addr, 16);
-    sum += sum_every_16bits(daddr->s6_addr, 16);
-    sum += htons((uint16_t)(skb->len >> 16));
-    sum += htons((uint16_t)(skb->len & 0xFFFF));
-    sum += htons(IP_TCP);
+    len = skb->len;
+    memset(pseudo, 0, sizeof(pseudo));
+    memcpy(pseudo, saddr->s6_addr, 16);
+    memcpy(pseudo + 16, daddr->s6_addr, 16);
+    pseudo[32] = (uint8_t)(len >> 24);
+    pseudo[33] = (uint8_t)(len >> 16);
+    pseudo[34] = (uint8_t)(len >> 8);
+    pseudo[35] = (uint8_t)(len & 0xFF);
+    /* pseudo[36..38] = 0 */
+    pseudo[39] = IP_TCP;
+
+    sum += sum_every_16bits(pseudo, 40);
 
     return checksum(skb->data, skb->len, sum);
 }
