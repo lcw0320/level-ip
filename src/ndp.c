@@ -88,6 +88,7 @@ void ndp_flush_queue(struct ndp_entry *entry)
     while (!skb_queue_empty(&entry->queue)) {
         skb = skb_dequeue(&entry->queue);
         netdev_transmit(skb, dmac, ETH_P_IPV6);
+        free_skb(skb);
     }
 }
 
@@ -235,7 +236,9 @@ int ndp_send_ns(struct in6_addr *target, struct in6_addr *src,
 
     /* 5. Send to the Ethernet multicast MAC */
     ipv6_multicast_mac(&dst_mc, dst_mac);
-    return netdev_transmit(skb, dst_mac, ETH_P_IPV6);
+    netdev_transmit(skb, dst_mac, ETH_P_IPV6);
+    free_skb(skb);
+    return 0;
 }
 
 /*
@@ -308,7 +311,9 @@ int ndp_send_rs(struct in6_addr *src, struct netdev *dev)
 
     /* 5. Send to Ethernet multicast MAC */
     ipv6_multicast_mac(&dst_mc, dst_mac);
-    return netdev_transmit(skb, dst_mac, ETH_P_IPV6);
+    netdev_transmit(skb, dst_mac, ETH_P_IPV6);
+    free_skb(skb);
+    return 0;
 }
 
 /*
@@ -589,6 +594,7 @@ void ndp_ns_process(struct sk_buff *skb, struct ipv6hdr *ip6h,
 
     free_skb(skb);
     netdev_transmit(reply, dst_mac, ETH_P_IPV6);
+    free_skb(reply);
 }
 
 /*
