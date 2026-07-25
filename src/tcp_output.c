@@ -12,8 +12,10 @@ static void *tcp_retransmission_timeout(void *arg);
 
 static struct sk_buff *tcp_alloc_skb(uint8_t family, int optlen, int size)
 {
-    int ip_hlen = (family == AF_INET6) ? IPV6_HDR_LEN : IP_HDR_LEN;
-    int reserved = ETH_HDR_LEN + ip_hlen + TCP_HDR_LEN + optlen + size;
+    /* BUG: always uses IP_HDR_LEN (20), but IPv6 needs IPV6_HDR_LEN (40).
+     * This causes a 20-byte buffer underflow when ipv6_output pushes
+     * the 40-byte IPv6 header onto a buffer with only 20 bytes of headroom. */
+    int reserved = ETH_HDR_LEN + IP_HDR_LEN + TCP_HDR_LEN + optlen + size;
     struct sk_buff *skb = alloc_skb(reserved);
 
     skb_reserve(skb, reserved);
@@ -130,10 +132,7 @@ static int tcp_transmit_skb(struct sock *sk, struct sk_buff *skb, uint32_t seq)
     }
 
     if (sk->addr_family == AF_INET6) {
-        /* ── IPv6 path ──────────────────────────────────────
-         * tcp_alloc_skb reserved ETH + IPV6_HDR + TCP headroom.
-         * We resolve the source addr, compute checksum, then
-         * push the full packet (IPv6 hdr + TCP) in one step. */
+        /* ── IPv6 path ────────────────────────────────────── */
         struct rtentry *rt = route6_lookup(&sk->daddr.v6);
         struct ipv6hdr *ip6h = NULL;
         int tcp_len = thdr->hl * 4;
@@ -146,18 +145,11 @@ static int tcp_transmit_skb(struct sock *sk, struct sk_buff *skb, uint32_t seq)
         skb->dev = rt->dev;
         skb->rt = rt;
 
-        /* Resolve source address if unspecified */
-        if (ipv6_addr_is_unspecified(&sk->saddr.v6)) {
-            if (skb->dev->addr6_global_valid) {
-                memcpy(&sk->saddr.v6, &skb->dev->addr6_global,
-                       sizeof(struct in6_addr));
-            } else {
-                memcpy(&sk->saddr.v6, &skb->dev->addr6_ll,
-                       sizeof(struct in6_addr));
-            }
-        }
-
-        /* TCP checksum with the real source address */
+        /* BUG: TCP checksum computed BEFORE source address is resolved.
+         * sk->saddr.v6 is still :: (set by tcp_v6_connect), so the
+         * pseudo-header checksum uses :: as source. After this, the
+         * IPv6 header gets the real source address → checksum mismatch
+         * on the receiver side → SYN silently dropped. */
         thdr->csum = tcp_v6_checksum(skb, &sk->saddr.v6, &sk->daddr.v6);
 
         tcp_out_dbg(thdr, sk, skb);
@@ -178,6 +170,17 @@ static int tcp_transmit_skb(struct sock *sk, struct sk_buff *skb, uint32_t seq)
         ip6h->payload_len = htons((uint16_t)tcp_len);
         ip6h->nexthdr = NEXTHDR_TCP;
         ip6h->hop_limit = IPV6_DEFAULT_HOPLIMIT;
+
+        /* Source address resolution happens here — too late for checksum! */
+        if (ipv6_addr_is_unspecified(&sk->saddr.v6)) {
+            if (skb->dev->addr6_global_valid) {
+                memcpy(&sk->saddr.v6, &skb->dev->addr6_global,
+                       sizeof(struct in6_addr));
+            } else {
+                memcpy(&sk->saddr.v6, &skb->dev->addr6_ll,
+                       sizeof(struct in6_addr));
+            }
+        }
         memcpy(&ip6h->saddr, &sk->saddr.v6, sizeof(struct in6_addr));
         memcpy(&ip6h->daddr, &sk->daddr.v6, sizeof(struct in6_addr));
 
