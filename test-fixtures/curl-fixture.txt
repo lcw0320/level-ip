@@ -2,7 +2,7 @@ HTTP/1.0 200 OK
 Server:
 Date:
 Content-type: text/html; charset=utf-8
-Content-Length: 655
+Content-Length: 465
 
 <!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd">
 <html>
@@ -14,14 +14,10 @@ Content-Length: 655
 <h1>Directory listing for /</h1>
 <hr>
 <ul>
+<li><a href="lib/">lib/</a></li>
 <li><a href="README.md">README.md</a></li>
 <li><a href="send_ra.py">send_ra.py</a></li>
-<li><a href="suites/">suites/</a></li>
-<li><a href="test-all.sh">test-all.sh</a></li>
-<li><a href="test-run-all">test-run-all</a></li>
 <li><a href="test-run.sh">test-run.sh</a></li>
-<li><a href="test-slaac.sh">test-slaac.sh</a></li>
-<li><a href="utils/">utils/</a></li>
 </ul>
 <hr>
 </body>

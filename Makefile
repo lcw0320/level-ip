@@ -23,6 +23,8 @@ apps: $(apps)
 	$(MAKE) -C apps/curl-poll
 	$(MAKE) -C apps/curl-v6
 	$(MAKE) -C apps/tcp-v6-server
+	$(MAKE) -C apps/tcp
+	$(MAKE) -C apps/udp
 
 all: lvl-ip apps
 

@@ -190,9 +190,9 @@ int inet_bind(struct socket *sock, const struct sockaddr *addr,
         return -EAFNOSUPPORT;
     }
     
-    // check if addr is assigned
+    // check if addr is assigned to a known netdev (skip for INADDR_ANY)
     uint32_t bindaddr = sockaddr_addr(addr);
-    if (!netdev_get(ntohl(bindaddr))) {
+    if (bindaddr != INADDR_ANY && !netdev_get(ntohl(bindaddr))) {
         return -EADDRNOTAVAIL;
     }
 

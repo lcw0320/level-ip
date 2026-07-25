@@ -1,8 +1,0 @@
-#!/bin/bash
-
-# Plain network, no traffic shaping.
-NETEM_PORT=8001
-NETEM_CLASSID=""
-NETEM_QDISC=""
-
-source "$(dirname $0)/env-base"

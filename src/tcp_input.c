@@ -365,8 +365,8 @@ static inline struct tcp_sock * fork_socket(pid_t pid, struct sk_buff *skb, stru
         memcpy(&sk->sk->saddr.v6, saddr, sizeof(struct in6_addr));
         memcpy(&sk->sk->daddr.v6, daddr, sizeof(struct in6_addr));
     } else {
-        sk->sk->saddr.v4 = ntohl(*(uint32_t *)saddr);
-        sk->sk->daddr.v4 = ntohl(*(uint32_t *)daddr);
+        sk->sk->saddr.v4 = *(uint32_t *)saddr;
+        sk->sk->daddr.v4 = *(uint32_t *)daddr;
     }
     sk->sk->sport = sport;
     sk->sk->dport = th->sport;
