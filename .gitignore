@@ -16,3 +16,5 @@ apps/tcp-v6-server/server
 .obsidian/
 apps/curl-poll/curl-poll
 lvl-ip-test.log
+apps/tcp-server/server
+test.txt
