@@ -7,6 +7,11 @@
 
 #define RCBUF_LEN 512
 
+/* Cap address copy length to ipc_sockaddr.sa_data size to prevent stack overflow */
+#define SA_COPY_LEN(user_len) \
+    ((user_len) < sizeof(((struct ipc_sockaddr *)0)->sa_data) \
+     ? (user_len) : sizeof(((struct ipc_sockaddr *)0)->sa_data))
+
 static int (*__start_main)(int (*main) (int, char * *, char * *), int argc, \
                            char * * ubp_av, void (*init) (void), void (*fini) (void), \
                            void (*rtld_fini) (void), void (* stack_end));
@@ -244,8 +249,8 @@ int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen)
     struct ipc_connect payload;
     memset(&payload, 0, sizeof(payload));
     payload.sockfd = sockfd;
-    memcpy(payload.addr.sa_data, addr, addrlen);
-    payload.addr.sa_len = addrlen;
+    memcpy(payload.addr.sa_data, addr, SA_COPY_LEN(addrlen));
+    payload.addr.sa_len = SA_COPY_LEN(addrlen);
 
     memcpy(msg->data, &payload, sizeof(struct ipc_connect));
 
@@ -274,8 +279,8 @@ int bind(int sockfd, const struct sockaddr *addr,
     struct ipc_bind payload;
     memset(&payload, 0, sizeof(payload));
     payload.sockfd = sockfd;
-    memcpy(payload.addr.sa_data, addr, addrlen);
-    payload.addr.sa_len = addrlen;
+    memcpy(payload.addr.sa_data, addr, SA_COPY_LEN(addrlen));
+    payload.addr.sa_len = SA_COPY_LEN(addrlen);
 
     memcpy(msg->data, &payload, sizeof(struct ipc_bind));
 
@@ -333,8 +338,8 @@ int accept(int sockfd, struct sockaddr *__restrict__ addr, socklen_t *__restrict
     struct ipc_accept payload;
     memset(&payload, 0, sizeof(payload));
     payload.sockfd = sockfd;
-    memcpy(payload.addr.sa_data, addr, *addr_len);
-    payload.addr.sa_len = *addr_len;
+    memcpy(payload.addr.sa_data, addr, SA_COPY_LEN(*addr_len));
+    payload.addr.sa_len = SA_COPY_LEN(*addr_len);
     payload.addr_len = *addr_len;
 
     memcpy(msg->data, &payload, sizeof(struct ipc_accept));
@@ -370,7 +375,7 @@ int accept(int sockfd, struct sockaddr *__restrict__ addr, socklen_t *__restrict
 
     struct ipc_accept *data = (struct ipc_accept *) error->data;
 
-    memcpy(addr, data->addr.sa_data, data->addr.sa_len);
+    memcpy(addr, data->addr.sa_data, SA_COPY_LEN(data->addr.sa_len));
     if (addr_len != NULL) {
         *addr_len = data->addr.sa_len;
     }
@@ -414,7 +419,7 @@ ssize_t sendto(int sockfd, const void *buf, size_t len,
     payload.sockfd = sockfd;
     payload.len = len;
     payload.flags = flags;
-    memcpy(payload.addr.sa_data, dest_addr, dest_len);
+    memcpy(payload.addr.sa_data, dest_addr, SA_COPY_LEN(dest_len));
     payload.addr.sa_len = dest_len;
 
     memcpy(msg->data, &payload, sizeof(struct ipc_sendto));

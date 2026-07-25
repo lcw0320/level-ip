@@ -1,8 +1,0 @@
-#!/bin/bash
-
-# Simulate 2-second network delay.
-NETEM_PORT=8002
-NETEM_CLASSID="1:1"
-NETEM_QDISC="delay 2000ms"
-
-source "$(dirname $0)/env-base"

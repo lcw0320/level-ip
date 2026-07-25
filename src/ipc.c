@@ -225,8 +225,9 @@ static int ipc_accept(int sockfd, struct ipc_msg *msg)
 
     actual->sockfd = rc;
     memset(&actual->addr, 0, sizeof(struct ipc_sockaddr));
-    memcpy(actual->addr.sa_data, addr, addr_len);
-    actual->addr.sa_len = addr_len;
+    memcpy(actual->addr.sa_data, addr,
+           addr_len < sizeof(actual->addr.sa_data) ? addr_len : sizeof(actual->addr.sa_data));
+    actual->addr.sa_len = addr_len < sizeof(actual->addr.sa_data) ? addr_len : sizeof(actual->addr.sa_data);
     memcpy(&actual->addr_len, &addr_len, sizeof(socklen_t));
 
     if (ipc_try_send(sockfd, (char *)response, resplen) == -1) {

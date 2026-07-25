@@ -1,8 +1,0 @@
-#!/bin/bash
-
-# Simulate 25% packet loss.
-NETEM_PORT=8004
-NETEM_CLASSID="1:3"
-NETEM_QDISC="loss 25%"
-
-source "$(dirname $0)/env-base"

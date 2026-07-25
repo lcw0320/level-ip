@@ -1,9 +1,0 @@
-#!/bin/bash
-
-set -eu
-
-source "$(dirname $0)/env-delayed"
-source "$(dirname $0)/tests"
-
-run_tcp_tests 8002
-test_suite_summary
