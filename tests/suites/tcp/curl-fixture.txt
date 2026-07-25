@@ -2,7 +2,7 @@ HTTP/1.0 200 OK
 Server:
 Date:
 Content-type: text/html; charset=utf-8
-Content-Length: 608
+Content-Length: 655
 
 <!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd">
 <html>
@@ -19,6 +19,7 @@ Content-Length: 608
 <li><a href="suites/">suites/</a></li>
 <li><a href="test-all.sh">test-all.sh</a></li>
 <li><a href="test-run-all">test-run-all</a></li>
+<li><a href="test-run.sh">test-run.sh</a></li>
 <li><a href="test-slaac.sh">test-slaac.sh</a></li>
 <li><a href="utils/">utils/</a></li>
 </ul>
