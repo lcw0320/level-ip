@@ -3,4 +3,7 @@
 set -eu
 
 source "$(dirname $0)/env-lossy"
-source "$(dirname $0)/tests" 8004 "$0"
+source "$(dirname $0)/tests"
+
+run_tcp_tests 8004
+test_suite_summary

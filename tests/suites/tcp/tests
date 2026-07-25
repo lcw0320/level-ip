@@ -1,18 +1,18 @@
 #!/bin/bash
 
+# TCP test cases: sourced by suite-* files after env-base has set up the
+# network environment. Call run_tcp_tests <port> to execute all cases.
+
 set -eu
 
-port="$1"
-suite="$2"
-
 function test_synchronous_http_get {
-    response="$(timeout 15 "$repo/tools/level-ip" "$repo/apps/curl/curl" 10.0.0.5 $port | strip_http_header)"
+    response="$(timeout 15 "$repo/tools/level-ip" "$repo/apps/curl/curl" 10.0.0.5 "$TEST_PORT" | strip_http_header)"
 
     diff "$folder/curl-fixture.txt" <(echo "$response")
 }
 
 function test_poll_http_get {
-    response="$(timeout 15 "$repo/tools/level-ip" "$repo/apps/curl-poll/curl-poll" 10.0.0.5 $port | strip_http_header)"
+    response="$(timeout 15 "$repo/tools/level-ip" "$repo/apps/curl-poll/curl-poll" 10.0.0.5 "$TEST_PORT" | strip_http_header)"
 
     diff "$folder/curl-fixture.txt" <(echo "$response")
 }
@@ -21,6 +21,11 @@ function test_tcp_connection_refused {
     timeout 15 "$repo/tools/level-ip" "$repo/apps/curl/curl" 10.0.0.5 9999 2>&1 | grep -q "Connection refused"
 }
 
-test_run "test_synchronous_http_get" "$suite"
-test_run "test_poll_http_get" "$suite"
-test_run "test_tcp_connection_refused" "$suite"
+# Entry point: run all TCP test cases on the given port.
+function run_tcp_tests {
+    TEST_PORT="$1"
+
+    test_run "test_synchronous_http_get" "$0"
+    test_run "test_poll_http_get" "$0"
+    test_run "test_tcp_connection_refused" "$0"
+}

@@ -3,4 +3,7 @@
 set -eu
 
 source "$(dirname $0)/env-duplication"
-source "$(dirname $0)/tests" 8003 "$0"
+source "$(dirname $0)/tests"
+
+run_tcp_tests 8003
+test_suite_summary
