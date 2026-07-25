@@ -579,6 +579,7 @@ int tcp_connect(struct sock *sk)
     tcb->rcv_nxt = 0;
 
     tcp_select_initial_window(&tsk->tcb.rcv_wnd);
+    tsk->tcb.real_rcv_wnd = tsk->tcb.rcv_wnd;
 
     rc = tcp_send_syn(sk);
     tcb->snd_nxt++;

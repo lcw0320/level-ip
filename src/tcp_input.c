@@ -441,6 +441,9 @@ static int tcp_synsent(struct tcp_sock *tsk, struct sk_buff *skb, struct tcphdr 
     if (tcb->snd_una > tcb->iss) {
         tcp_set_state(sk, TCP_ESTABLISHED);
         tcb->snd_una = tcb->snd_nxt;
+        tcb->snd_wnd = th->win;
+        tcb->snd_wl1 = th->seq;
+        tcb->snd_wl2 = th->ack_seq;
         tsk->backoff = 0;
         /* RFC 6298: Sender SHOULD set RTO <- 1 second */
         tsk->rto = 1000;

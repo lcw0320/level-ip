@@ -11,3 +11,5 @@ apps/curl/curl
 tools/liblevelip.so
 .claude/
 tools/test.txt
+apps/curl-v6/curl-v6
+apps/tcp-v6-server/server
