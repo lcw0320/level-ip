@@ -5,7 +5,7 @@ set -eu
 source "utils/common"
 
 function teardown {
-    kill "$stackip"
+    kill "$stackip" 2>/dev/null || true
 }
 
 trap teardown EXIT ERR
@@ -14,9 +14,12 @@ start_stack
 echo "Started lvl-ip with pid $stackip"
 sleep 5 # wait for stack to establish itself
 
-pids=""
+# ── Round 1: non-conflicting suites ─────────────────────
+# delay + loss netems can coexist under the same HTB tree.
 
 tc qdisc add dev tap0 root handle 1: htb
+
+pids=""
 
 ./suites/arp/suite-arp &
 pids="$pids $!"
@@ -26,11 +29,11 @@ pids="$pids $!"
 pids="$pids $!"
 ./suites/tcp/suite-packet-delay &
 pids="$pids $!"
-./suites/tcp/suite-packet-duplication &
-pids="$pids $!"
 ./suites/tcp/suite-packet-loss &
 pids="$pids $!"
 ./suites/ipv6/suite-ipv6 &
+pids="$pids $!"
+./suites/tcp-v6/suite-tcp-v6 &
 pids="$pids $!"
 
 rc=0
@@ -39,6 +42,22 @@ for i in $pids; do
   pid_rc="$?"
   [ "$pid_rc" -ne 0 ] && rc="$pid_rc"
 done
+
+# ── Round 2: duplication suite (isolated) ───────────────
+# "netem duplicate" cannot coexist with other netems in the
+# same HTB tree, so it runs after Round 1 finishes.
+
+tc qdisc del dev tap0 root 2>/dev/null || true
+tc qdisc add dev tap0 root handle 1: htb
+
+./suites/tcp/suite-packet-duplication &
+wait $!
+dup_rc="$?"
+[ "$dup_rc" -ne 0 ] && rc="$dup_rc"
+
+tc qdisc del dev tap0 root 2>/dev/null || true
+
+# ── Summary ──────────────────────────────────────────────
 
 grep -i -B50 "SUMMARY: ThreadSanitizer:" ../lvl-ip-test.log && echo "Possible threading errors found."
 
