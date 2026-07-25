@@ -29,11 +29,12 @@ all: lvl-ip apps
 
 test: debug apps
 	@echo
-	@echo "Networking capabilites are required for test dependencies:"
-	which arping | sudo xargs setcap cap_net_raw=ep
-	which tc | sudo xargs setcap cap_net_admin=ep
+	sudo bash tests/test-run.sh
+
+run: debug
 	@echo
-	cd tests && ./test-run-all
+	sudo setcap cap_setpcap,cap_net_admin=ep lvl-ip
+	sudo ./lvl-ip
 
 clean:
 	rm build/*.o lvl-ip
