@@ -241,4 +241,9 @@ int ipv6_output(struct sk_buff *skb, uint8_t nexthdr,
                 const struct in6_addr *saddr,
                 const struct in6_addr *daddr);
 
+int ipv6_output_ex(struct sk_buff *skb, uint8_t nexthdr,
+                   const struct in6_addr *saddr,
+                   const struct in6_addr *daddr,
+                   int headroom_reserved);
+
 #endif /* IPV6_H */

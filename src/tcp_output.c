@@ -5,12 +5,15 @@
 #include "ipv6.h"
 #include "skbuff.h"
 #include "timer.h"
+#include "route.h"
+#include "dst.h"
 
 static void *tcp_retransmission_timeout(void *arg);
 
-static struct sk_buff *tcp_alloc_skb(int optlen, int size)
+static struct sk_buff *tcp_alloc_skb(uint8_t family, int optlen, int size)
 {
-    int reserved = ETH_HDR_LEN + IP_HDR_LEN + TCP_HDR_LEN + optlen + size;
+    int ip_hlen = (family == AF_INET6) ? IPV6_HDR_LEN : IP_HDR_LEN;
+    int reserved = ETH_HDR_LEN + ip_hlen + TCP_HDR_LEN + optlen + size;
     struct sk_buff *skb = alloc_skb(reserved);
 
     skb_reserve(skb, reserved);
@@ -105,31 +108,86 @@ static int tcp_transmit_skb(struct sock *sk, struct sk_buff *skb, uint32_t seq)
 {
     struct tcp_sock *tsk = tcp_sk(sk);
     struct tcb *tcb = &tsk->tcb;
-    struct tcphdr *thdr = tcp_hdr(skb);
+    struct tcphdr *thdr = tcp_hdr_for_sk(sk, skb);
 
     /* No options were previously set */
     if (thdr->hl == 0) thdr->hl = TCP_DOFFSET;
-
-    skb_push(skb, thdr->hl * 4);
 
     thdr->sport = sk->sport;
     thdr->dport = sk->dport;
     thdr->seq = seq;
     thdr->ack_seq = tcb->rcv_nxt;
     thdr->rsvd = 0;
-    /* RFC 7323 2.4 The receiver MUST honor, as in window, any segment that would
-     * have been in window for any <ACK> sent by the receiver.
-     */
     thdr->win = tcb->real_rcv_wnd;
     if (!thdr->syn) {
         thdr->win = thdr->win >> tsk->rcv_scale;
-    } 
+    }
     thdr->csum = 0;
     thdr->urp = 0;
 
     if (thdr->hl > 5) {
         tcp_write_options(tsk, thdr);
     }
+
+    if (sk->addr_family == AF_INET6) {
+        /* ── IPv6 path ──────────────────────────────────────
+         * tcp_alloc_skb reserved ETH + IPV6_HDR + TCP headroom.
+         * We resolve the source addr, compute checksum, then
+         * push the full packet (IPv6 hdr + TCP) in one step. */
+        struct rtentry *rt = route6_lookup(&sk->daddr.v6);
+        struct ipv6hdr *ip6h = NULL;
+        int tcp_len = thdr->hl * 4;
+
+        if (rt == NULL) {
+            print_err("tcp_transmit_skb: IPv6 route lookup failed\n");
+            free_skb(skb);
+            return -1;
+        }
+        skb->dev = rt->dev;
+        skb->rt = rt;
+
+        /* Resolve source address if unspecified */
+        if (ipv6_addr_is_unspecified(&sk->saddr.v6)) {
+            if (skb->dev->addr6_global_valid) {
+                memcpy(&sk->saddr.v6, &skb->dev->addr6_global,
+                       sizeof(struct in6_addr));
+            } else {
+                memcpy(&sk->saddr.v6, &skb->dev->addr6_ll,
+                       sizeof(struct in6_addr));
+            }
+        }
+
+        /* TCP checksum with the real source address */
+        thdr->csum = tcp_v6_checksum(skb, &sk->saddr.v6, &sk->daddr.v6);
+
+        tcp_out_dbg(thdr, sk, skb);
+
+        /* Convert TCP header fields to network byte order */
+        thdr->sport = htons(thdr->sport);
+        thdr->dport = htons(thdr->dport);
+        thdr->seq = htonl(thdr->seq);
+        thdr->ack_seq = htonl(thdr->ack_seq);
+        thdr->win = htons(thdr->win);
+        thdr->csum = htons(thdr->csum);
+        thdr->urp = htons(thdr->urp);
+
+        /* Push IPv6 header + TCP header in one step */
+        skb_push(skb, IPV6_HDR_LEN + tcp_len);
+        ip6h = (struct ipv6hdr *)skb->data;
+        ipv6_hdr_set_vtc_flow(ip6h, IPV6_VERSION, 0, 0);
+        ip6h->payload_len = htons((uint16_t)tcp_len);
+        ip6h->nexthdr = NEXTHDR_TCP;
+        ip6h->hop_limit = IPV6_DEFAULT_HOPLIMIT;
+        memcpy(&ip6h->saddr, &sk->saddr.v6, sizeof(struct in6_addr));
+        memcpy(&ip6h->daddr, &sk->daddr.v6, sizeof(struct in6_addr));
+
+        ipv6_dbg("out", ip6h);
+
+        return dst6_neigh_output(skb);
+    }
+
+    /* ── IPv4 path ────────────────────────────────────────── */
+    skb_push(skb, thdr->hl * 4);
 
     tcp_out_dbg(thdr, sk, skb);
 
@@ -141,14 +199,6 @@ static int tcp_transmit_skb(struct sock *sk, struct sk_buff *skb, uint32_t seq)
     thdr->csum = htons(thdr->csum);
     thdr->urp = htons(thdr->urp);
 
-    if (sk->addr_family == AF_INET6) {
-        /* IPv6 path: tcp_v6_checksum + ipv6_output */
-        thdr->csum = 0;
-        thdr->csum = tcp_v6_checksum(skb, &sk->saddr.v6, &sk->daddr.v6);
-        return ipv6_output(skb, NEXTHDR_TCP, &sk->saddr.v6, &sk->daddr.v6);
-    }
-
-    /* IPv4 path (original logic) */
     thdr->csum = tcp_v4_checksum(skb, htonl(sk->saddr.v4), htonl(sk->daddr.v4));
 
     return ip_output(sk, skb);
@@ -177,7 +227,7 @@ static int tcp_queue_transmit_skb(struct sock *sk, struct sk_buff *skb)
 {
     struct tcp_sock *tsk = tcp_sk(sk);
     struct tcb *tcb = &tsk->tcb;
-    struct tcphdr *th = tcp_hdr(skb);
+    struct tcphdr *th = tcp_hdr_for_sk(sk, skb);
     int was_empty = 0;
     int rc = 0;
 
@@ -222,8 +272,8 @@ int tcp_send_synack(struct sock *sk)
     // todo: set correct hl, now only send window scale
     int hl = 6;
 
-    skb = tcp_alloc_skb((hl - 5) << 2, 0);
-    th = tcp_hdr(skb);
+    skb = tcp_alloc_skb(sk->addr_family, (hl - 5) << 2, 0);
+    th = tcp_hdr_for_sk(sk, skb);
 
     th->syn = 1;
     th->ack = 1;
@@ -332,9 +382,9 @@ int tcp_send_ack(struct sock *sk)
     int rc = 0;
     int optlen = tcp_options_len(sk);
 
-    skb = tcp_alloc_skb(optlen, 0);
+    skb = tcp_alloc_skb(sk->addr_family, optlen, 0);
     
-    th = tcp_hdr(skb);
+    th = tcp_hdr_for_sk(sk, skb);
     th->ack = 1;
     th->hl = TCP_DOFFSET + (optlen / 4);
 
@@ -357,8 +407,8 @@ static int tcp_send_syn(struct sock *sk)
     int tcp_options_len = 0;
 
     tcp_options_len = tcp_syn_options(sk, &opts);
-    skb = tcp_alloc_skb(tcp_options_len, 0);
-    th = tcp_hdr(skb);
+    skb = tcp_alloc_skb(sk->addr_family, tcp_options_len, 0);
+    th = tcp_hdr_for_sk(sk, skb);
 
     tcp_write_syn_options(th, &opts, tcp_options_len);
     sk->state = TCP_SYN_SENT;
@@ -375,9 +425,9 @@ int tcp_send_fin(struct sock *sk)
     struct tcphdr *th;
     int rc = 0;
 
-    skb = tcp_alloc_skb(0, 0);
+    skb = tcp_alloc_skb(sk->addr_family, 0, 0);
     
-    th = tcp_hdr(skb);
+    th = tcp_hdr_for_sk(sk, skb);
     th->fin = 1;
     th->ack = 1;
 
@@ -500,7 +550,7 @@ static void *tcp_retransmission_timeout(void *arg)
 
     tcp_sack_clear(tsk);
 
-    th = tcp_hdr(skb);
+    th = tcp_hdr_for_sk(sk, skb);
     skb_reset_header(skb);
 
     tcp_transmit_skb(sk, skb, tcb->snd_una);
@@ -596,13 +646,13 @@ int tcp_send(struct tcp_sock *tsk, const void *buf, int len)
         dlen = slen > mss ? mss : slen;
         slen -= dlen;
 
-        skb = tcp_alloc_skb(0, dlen);
+        skb = tcp_alloc_skb(tsk->sk.addr_family, 0, dlen);
         skb_push(skb, dlen);
         memcpy(skb->data, buf, dlen);
         
         buf += dlen;
 
-        th = tcp_hdr(skb);
+        th = tcp_hdr_for_sk(&tsk->sk, skb);
         th->ack = 1;
 
         if (slen == 0) {
@@ -626,8 +676,8 @@ int tcp_send_reset(struct tcp_sock *tsk)
     struct tcb *tcb;
     int rc = 0;
 
-    skb = tcp_alloc_skb(0, 0);
-    th = tcp_hdr(skb);
+    skb = tcp_alloc_skb(tsk->sk.addr_family, 0, 0);
+    th = tcp_hdr_for_sk(&tsk->sk, skb);
     tcb = &tsk->tcb;
 
     th->rst = 1;
@@ -651,8 +701,8 @@ int tcp_queue_fin(struct sock *sk)
     struct tcphdr *th;
     int rc = 0;
 
-    skb = tcp_alloc_skb(0, 0);
-    th = tcp_hdr(skb);
+    skb = tcp_alloc_skb(sk->addr_family, 0, 0);
+    th = tcp_hdr_for_sk(sk, skb);
 
     th->fin = 1;
     th->ack = 1;

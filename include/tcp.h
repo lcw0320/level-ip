@@ -3,6 +3,7 @@
 #include "syshead.h"
 #include "tcp_passive_conn.h"
 #include "ip.h"
+#include "ipv6.h"
 #include "timer.h"
 #include "utils.h"
 
@@ -267,7 +268,17 @@ struct tcp_sock {
 
 static inline struct tcphdr *tcp_hdr(const struct sk_buff *skb)
 {
+    /* RX path: IPv4 only.  For IPv6, tcp_in_v6 gets the pointer directly. */
     return (struct tcphdr *)(skb->head + ETH_HDR_LEN + IP_HDR_LEN);
+}
+
+/* TX path: family-aware TCP header location.
+ * tcp_alloc_skb reserves the correct IP header size based on family. */
+static inline struct tcphdr *tcp_hdr_for_sk(const struct sock *sk,
+                                             const struct sk_buff *skb)
+{
+    int ip_hlen = (sk->addr_family == AF_INET6) ? IPV6_HDR_LEN : IP_HDR_LEN;
+    return (struct tcphdr *)(skb->head + ETH_HDR_LEN + ip_hlen);
 }
 
 void tcp_init();
