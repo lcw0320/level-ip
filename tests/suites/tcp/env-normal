@@ -1,24 +1,8 @@
 #!/bin/bash
 
-set -eu
+# Plain network, no traffic shaping.
+NETEM_PORT=8001
+NETEM_CLASSID=""
+NETEM_QDISC=""
 
-source "$(dirname $0)/../../utils/common"
-# Simple end-to-end test for an application's curl
-
-function strip_http_header {
-    sed 's/^Date:.*/Date:/' | sed 's/^Server:.*/Server:/'
-}
-
-function setup {
-    python3 -m http.server 8001 >/dev/null 2>&1 &
-    httpserver="$!"
-
-    sleep 5
-}
-
-function teardown_suite {
-    kill "$httpserver"
-}
-
-setup
-trap teardown_suite EXIT ERR
+source "$(dirname $0)/env-base"

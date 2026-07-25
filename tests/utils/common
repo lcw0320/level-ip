@@ -5,6 +5,10 @@ set -eu
 repo="$(git rev-parse --show-toplevel)"
 folder="$(dirname $0)"
 
+# Test result counters
+TESTS_PASSED=0
+TESTS_FAILED=0
+
 function start_stack {
     "$repo/lvl-ip" > ../lvl-ip-test.log 2>&1 &
     stackip="$!"
@@ -21,16 +25,33 @@ function start_stack {
 }
 
 function test_pass {
-    echo -e "\t$2 Test pass: $1"
+    echo -e "\t$TEST_NAME Test pass: $1"
 }
 
 function test_fail {
-    echo -e "\t$2 Test fail: $1" 2>&1
-    exit 1
+    echo -e "\t$TEST_NAME Test fail: $1" 2>&1
 }
 
+# Run a single test function. Always returns 0 so that set -e does not abort
+# the suite on the first failure; results are tallied by test_suite_summary.
 function test_run {
-    eval "$1" || test_fail "$1" "$2"
+    local cmd="$1"
+    TEST_NAME="${2:-$0}"
 
-    test_pass "$1" "$2"
+    if eval "$cmd"; then
+        test_pass "$cmd"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        test_fail "$cmd"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+}
+
+# Print pass/fail summary. Exit 1 if any test failed.
+# Must be called at the end of every suite script.
+function test_suite_summary {
+    echo "  $TESTS_PASSED passed, $TESTS_FAILED failed"
+    if [[ "$TESTS_FAILED" -gt 0 ]]; then
+        exit 1
+    fi
 }

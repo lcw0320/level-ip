@@ -13,3 +13,6 @@ tools/liblevelip.so
 tools/test.txt
 apps/curl-v6/curl-v6
 apps/tcp-v6-server/server
+.obsidian/
+apps/curl-poll/curl-poll
+lvl-ip-test.log

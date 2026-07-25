@@ -220,7 +220,7 @@ int tcp_send_synack(struct sock *sk)
     struct tcb * tcb = &tcp_sk(sk)->tcb;
     int rc = 0;
     // todo: set correct hl, now only send window scale
-    int hl = 6; 
+    int hl = 6;
 
     skb = tcp_alloc_skb((hl - 5) << 2, 0);
     th = tcp_hdr(skb);
@@ -228,13 +228,10 @@ int tcp_send_synack(struct sock *sk)
     th->syn = 1;
     th->ack = 1;
     th->hl = 6;
-    
-    // todo: need retransmit
-    rc = tcp_transmit_skb(sk, skb, tcb->snd_nxt);
-    
 
-    free_skb(skb);
-    
+    rc = tcp_queue_transmit_skb(sk, skb);
+    tcb->snd_nxt++;
+
     return rc;
 }
 
