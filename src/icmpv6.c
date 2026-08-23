@@ -210,17 +210,19 @@ void icmpv6_incoming(struct sk_buff *skb, uint8_t *payload)
     struct in6_addr daddr;
     uint16_t csum = 0;
     uint16_t plen = 0;
+    uint16_t icmpv6_len = 0;
 
     ip6h = ipv6_hdr(skb);
     icmph = (struct icmpv6_hdr *)payload;
     plen = ntohs(ip6h->payload_len);
 
+    icmpv6_len = plen - (uint16_t)(payload - (uint8_t *)(ip6h + 1));
     /* Copy addresses to avoid unaligned access from packed struct */
     memcpy(&saddr, &ip6h->saddr, sizeof(struct in6_addr));
     memcpy(&daddr, &ip6h->daddr, sizeof(struct in6_addr));
 
     /* 1. Validate ICMPv6 checksum (RFC 8200 §8.1) */
-    csum = icmpv6_checksum(&saddr, &daddr, payload, plen);
+    csum = icmpv6_checksum(&saddr, &daddr, payload, icmpv6_len);
     if (csum != 0) {
         print_err("ICMPv6: checksum mismatch (got 0x%04x)\n", csum);
         free_skb(skb);
