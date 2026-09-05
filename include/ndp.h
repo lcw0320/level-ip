@@ -107,14 +107,23 @@ struct ndp_na {
     uint8_t type;            /* 136 */
     uint8_t code;            /* 0 */
     uint16_t csum;
-    uint8_t r_flag : 1;      /* Router flag */
-    uint8_t s_flag : 1;      /* Solicited flag */
-    uint8_t o_flag : 1;      /* Override flag */
-    uint8_t reserved_hi : 5;
+    uint8_t flags;
     uint8_t reserved[3];
     struct in6_addr target;  /* Target IPv6 address */
     uint8_t options[];       /* Target Link-Layer Address option */
 } __attribute__((packed));
+
+#define GET_NA_R(flags) (((flags) >> 7) & 1)
+#define GET_NA_S(flags) (((flags) >> 6) & 1)
+#define GET_NA_O(flags) (((flags) >> 5) & 1)
+
+#define SET_NA_R(flags) ((flags) |= (1 << 7))
+#define SET_NA_S(flags) ((flags) |= (1 << 6))
+#define SET_NA_O(flags) ((flags) |= (1 << 5))
+
+#define CLR_NA_R(flags) ((flags) &= ~(1 << 7))
+#define CLR_NA_S(flags) ((flags) &= ~(1 << 6))
+#define CLR_NA_O(flags) ((flags) &= ~(1 << 5))
 
 /*
  * Router Solicitation (RFC 4861 §4.1)

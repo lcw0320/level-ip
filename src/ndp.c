@@ -414,7 +414,7 @@ void ndp_na_process(struct sk_buff *skb, struct ipv6hdr *ip6h,
     memcpy(&target, &na->target, sizeof(struct in6_addr));
     memcpy(&saddr, &ip6h->saddr, sizeof(struct in6_addr));
 
-    ndp_dbg("recv NA S=%d O=%d", na->s_flag, na->o_flag);
+    ndp_dbg("recv NA S=%d O=%d", GET_NA_S(na->flags), GET_NA_O(na->flags));
 
     /* 1. Parse Target Link-Layer Address option */
     opt = na->options;
@@ -453,13 +453,13 @@ void ndp_na_process(struct sk_buff *skb, struct ipv6hdr *ip6h,
             ndp_flush_queue(entry);
         } else {
             /* REACHABLE/STALE/DELAY/PROBE: update per O/S flags */
-            if (na->o_flag ||
+            if (GET_NA_O(na->flags) ||
                 memcmp(entry->hwaddr, tlla, 6) != 0) {
                 memcpy(entry->hwaddr, tlla, 6);
             }
-            if (na->s_flag) {
+            if (GET_NA_S(na->flags)) {
                 entry->state = NDP_REACHABLE;
-            } else if (na->o_flag ||
+            } else if (GET_NA_O(na->flags) ||
                        memcmp(entry->hwaddr, tlla, 6) != 0) {
                 entry->state = NDP_STALE;
             }
@@ -544,10 +544,9 @@ void ndp_ns_process(struct sk_buff *skb, struct ipv6hdr *ip6h,
     na->type = ICMPV6_NEIGHBOR_ADVERT;
     na->code = 0;
     na->csum = 0;
-    na->r_flag = 0;
-    na->s_flag = 1;  /* Solicited: this is a response to an NS */
-    na->o_flag = 1;  /* Override: always overwrite the cache entry */
-    na->reserved_hi = 0;
+    CLR_NA_R(na->flags);
+    SET_NA_S(na->flags);  /* Solicited: this is a response to an NS */
+    SET_NA_O(na->flags);  /* Override: always overwrite the cache entry */
     memset(na->reserved, 0, sizeof(na->reserved));
     memcpy(&na->target, &target, sizeof(struct in6_addr));
 
