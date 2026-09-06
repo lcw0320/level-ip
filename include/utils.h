@@ -3,6 +3,22 @@
 
 #define CMDBUFLEN 100
 
+#ifdef DEBUG_SOCKET
+    #define SAFE_FREE(ptr) do { \
+        if ((ptr) != NULL) { \
+            printf("[MEM_FREE] %s:%d (%s): Freeing memory at %p\n", \
+                      __FILE__, __LINE__, __func__, (ptr)); \
+            free(ptr); \
+            (ptr) = NULL; \
+        } \
+    } while (0)
+#else
+    #define SAFE_FREE(ptr) do { \
+        free(ptr); \
+        (ptr) = NULL; \
+    } while (0)
+#endif
+
 #define sockaddr_addr(sockaddr) ((uint32_t)(((struct sockaddr_in *)addr)->sin_addr.s_addr))
 #define sockaddr_port(sockaddr) ((uint16_t)(((struct sockaddr_in *)sockaddr)->sin_port))
 

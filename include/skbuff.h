@@ -24,6 +24,7 @@ struct sk_buff {
     uint8_t *data;
     uint8_t *payload;
     uint8_t sacked;
+    uint32_t tcpcsum;
 };
 
 struct sk_buff_head {

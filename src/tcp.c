@@ -166,27 +166,24 @@ int tcp_v4_checksum(struct sk_buff *skb, uint32_t saddr, uint32_t daddr)
  *   Upper-Layer Length   : 32 bits
  *   Zero (3 bytes) + NH  : 8 bits  (TCP = 6)
  */
-int tcp_v6_checksum(struct sk_buff *skb, struct in6_addr *saddr,
-                    struct in6_addr *daddr)
+int tcp_v6_tcp_partion_checksum(struct sk_buff *skb)
 {
     uint32_t sum = 0;
     uint32_t len = 0;
-    uint8_t pseudo[40];
+    uint8_t pseudo[8] = {0};
 
     len = skb->len;
-    memset(pseudo, 0, sizeof(pseudo));
-    memcpy(pseudo, saddr->s6_addr, 16);
-    memcpy(pseudo + 16, daddr->s6_addr, 16);
-    pseudo[32] = (uint8_t)(len >> 24);
-    pseudo[33] = (uint8_t)(len >> 16);
-    pseudo[34] = (uint8_t)(len >> 8);
-    pseudo[35] = (uint8_t)(len & 0xFF);
+    pseudo[0] = (uint8_t)(len >> 24);
+    pseudo[1] = (uint8_t)(len >> 16);
+    pseudo[2] = (uint8_t)(len >> 8);
+    pseudo[3] = (uint8_t)(len & 0xFF);
     /* pseudo[36..38] = 0 */
-    pseudo[39] = IP_TCP;
+    pseudo[7] = IP_TCP;
 
-    sum += sum_every_16bits(pseudo, 40);
+    sum += sum_every_16bits(pseudo, 8);
+    sum += sum_every_16bits(skb->data, skb->len);
 
-    return checksum(skb->data, skb->len, sum);
+    return sum;
 }
 
 struct sock *tcp_alloc_sock()

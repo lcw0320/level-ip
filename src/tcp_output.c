@@ -113,6 +113,8 @@ static int tcp_transmit_skb(struct sock *sk, struct sk_buff *skb, uint32_t seq)
     /* No options were previously set */
     if (thdr->hl == 0) thdr->hl = TCP_DOFFSET;
 
+    skb_push(skb, thdr->hl * 4);
+    tcp_out_dbg(thdr, sk, skb);
     thdr->sport = sk->sport;
     thdr->dport = sk->dport;
     thdr->seq = seq;
@@ -129,79 +131,21 @@ static int tcp_transmit_skb(struct sock *sk, struct sk_buff *skb, uint32_t seq)
         tcp_write_options(tsk, thdr);
     }
 
-    if (sk->addr_family == AF_INET6) {
-        /* ── IPv6 path ──────────────────────────────────────
-         * tcp_alloc_skb reserved ETH + IPV6_HDR + TCP headroom.
-         * We resolve the source addr, compute checksum, then
-         * push the full packet (IPv6 hdr + TCP) in one step. */
-        struct rtentry *rt = route6_lookup(&sk->daddr.v6);
-        struct ipv6hdr *ip6h = NULL;
-        int tcp_len = thdr->hl * 4;
-
-        if (rt == NULL) {
-            print_err("tcp_transmit_skb: IPv6 route lookup failed\n");
-            free_skb(skb);
-            return -1;
-        }
-        skb->dev = rt->dev;
-        skb->rt = rt;
-
-        /* Resolve source address if unspecified */
-        if (ipv6_addr_is_unspecified(&sk->saddr.v6)) {
-            if (skb->dev->addr6_global_valid) {
-                memcpy(&sk->saddr.v6, &skb->dev->addr6_global,
-                       sizeof(struct in6_addr));
-            } else {
-                memcpy(&sk->saddr.v6, &skb->dev->addr6_ll,
-                       sizeof(struct in6_addr));
-            }
-        }
-
-        /* TCP checksum with the real source address */
-        thdr->csum = tcp_v6_checksum(skb, &sk->saddr.v6, &sk->daddr.v6);
-
-        tcp_out_dbg(thdr, sk, skb);
-
-        /* Convert TCP header fields to network byte order */
-        thdr->sport = htons(thdr->sport);
-        thdr->dport = htons(thdr->dport);
-        thdr->seq = htonl(thdr->seq);
-        thdr->ack_seq = htonl(thdr->ack_seq);
-        thdr->win = htons(thdr->win);
-        thdr->csum = htons(thdr->csum);
-        thdr->urp = htons(thdr->urp);
-
-        /* Push IPv6 header + TCP header in one step */
-        skb_push(skb, IPV6_HDR_LEN + tcp_len);
-        ip6h = (struct ipv6hdr *)skb->data;
-        ipv6_hdr_set_vtc_flow(ip6h, IPV6_VERSION, 0, 0);
-        ip6h->payload_len = htons((uint16_t)tcp_len);
-        ip6h->nexthdr = NEXTHDR_TCP;
-        ip6h->hop_limit = IPV6_DEFAULT_HOPLIMIT;
-        memcpy(&ip6h->saddr, &sk->saddr.v6, sizeof(struct in6_addr));
-        memcpy(&ip6h->daddr, &sk->daddr.v6, sizeof(struct in6_addr));
-
-        ipv6_dbg("out", ip6h);
-
-        return dst6_neigh_output(skb);
-    }
-
-    /* ── IPv4 path ────────────────────────────────────────── */
-    skb_push(skb, thdr->hl * 4);
-
-    tcp_out_dbg(thdr, sk, skb);
-
     thdr->sport = htons(thdr->sport);
     thdr->dport = htons(thdr->dport);
     thdr->seq = htonl(thdr->seq);
     thdr->ack_seq = htonl(thdr->ack_seq);
     thdr->win = htons(thdr->win);
-    thdr->csum = htons(thdr->csum);
     thdr->urp = htons(thdr->urp);
 
-    thdr->csum = tcp_v4_checksum(skb, htonl(sk->saddr.v4), htonl(sk->daddr.v4));
-
-    return ip_output(sk, skb);
+    if (sk->addr_family == AF_INET6) {
+        /* TCP checksum with the real source address */
+        skb->tcpcsum = tcp_v6_tcp_partion_checksum(skb);
+        return ipv6_output(skb, NEXTHDR_TCP, &sk->saddr.v6, &sk->daddr.v6);
+    } else {
+        thdr->csum = checksum(skb->data, skb->len, 0);
+        return ip_output(sk, skb);
+    }
 }
 
 /* 发送窗口反压：FlightSize 超过 min(cwnd, rwnd) 就释放锁睡眠，
@@ -463,7 +407,7 @@ static void *tcp_connect_rto(void *arg)
      * 此处 epoch 不一致说明这次定时器已被取消或被新一轮覆盖。 */
     if (targ->epoch != tsk->rto_epoch) {
         socket_release(sk->sock);
-        free(targ);
+        SAFE_FREE(targ);
         return NULL;
     }
 
@@ -490,7 +434,7 @@ static void *tcp_connect_rto(void *arg)
     }
 
     socket_release(sk->sock);
-    free(targ);
+    SAFE_FREE(targ);
 
     return NULL;
 }
@@ -525,7 +469,7 @@ static void *tcp_retransmission_timeout(void *arg)
      * 不一致表示这次定时器已被取消或被新一轮覆盖，作废即可。 */
     if (targ->epoch != tsk->rto_epoch) {
         socket_release(sk->sock);
-        free(targ);
+        SAFE_FREE(targ);
         return NULL;
     }
 
@@ -563,7 +507,7 @@ static void *tcp_retransmission_timeout(void *arg)
         sk->poll_events |= (POLLOUT | POLLERR | POLLHUP);
 
         socket_release(sk->sock);
-        free(targ);
+        SAFE_FREE(targ);
         return NULL;
     } else {
         /* RFC 6298: Section 5.5 double RTO time */
@@ -578,7 +522,7 @@ static void *tcp_retransmission_timeout(void *arg)
 
 unlock:
     socket_release(sk->sock);
-    free(targ);
+    SAFE_FREE(targ);
 
     return NULL;
 }

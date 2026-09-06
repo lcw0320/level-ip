@@ -4,6 +4,18 @@
 #include "route.h"
 #include "netdev.h"
 #include "skbuff.h"
+#include "tcp.h"
+
+static int tcp_v6_ip_partion_checksum(struct in6_addr *saddr, struct in6_addr *daddr, uint32_t csum)
+{
+    uint8_t pseudo[32];
+
+    memset(pseudo, 0, sizeof(pseudo));
+    memcpy(pseudo, saddr->s6_addr, 16);
+    memcpy(pseudo + 16, daddr->s6_addr, 16);
+
+    return checksum(pseudo, 32, csum);
+}
 
 /*
  * IPv6 output entry point (04 §3.4.2).
@@ -26,6 +38,7 @@ int ipv6_output_ex(struct sk_buff *skb, uint8_t nexthdr,
 {
     struct rtentry *rt = NULL;
     struct ipv6hdr *ip6h = NULL;
+    struct tcphdr *thdr = (struct tcphdr *)skb->data;
 
     /* 1. IPv6 route lookup */
     rt = route6_lookup(daddr);
@@ -73,6 +86,12 @@ int ipv6_output_ex(struct sk_buff *skb, uint8_t nexthdr,
     memcpy(&ip6h->daddr, daddr, sizeof(struct in6_addr));
 
     ipv6_dbg("out", ip6h);
+
+    struct in6_addr src_addr, dst_addr;
+    memcpy(&src_addr, &ip6h->saddr, sizeof(struct in6_addr));
+    memcpy(&dst_addr, &ip6h->daddr, sizeof(struct in6_addr));
+
+    thdr->csum = tcp_v6_ip_partion_checksum(&src_addr, &dst_addr, skb->tcpcsum);
 
     /* 4. Link-layer delivery via NDP (stub) / broadcast fallback */
     return dst6_neigh_output(skb);
