@@ -105,7 +105,7 @@ int tcp_data_queue(struct tcp_sock *tsk, struct tcphdr *th, struct sk_buff *skb)
     int rc = 0;
 
     if (!tcb->rcv_wnd) {
-        free_skb(skb);
+        /* skb 由调用方统一释放 */
         return -1;
     }
 

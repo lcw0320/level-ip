@@ -27,6 +27,32 @@ void free_skb(struct sk_buff *skb)
     }
 }
 
+/* 拷贝出独立的 skb：链表节点不能同时属于两条队列 */
+struct sk_buff *skb_copy(struct sk_buff *skb)
+{
+    unsigned int size = skb->end - skb->head;
+    struct sk_buff *nskb = alloc_skb(size);
+
+    memcpy(nskb->head, skb->head, size);
+    nskb->data = nskb->head + (skb->data - skb->head);
+
+    if (skb->payload != NULL) {
+        nskb->payload = nskb->head + (skb->payload - skb->head);
+    }
+
+    nskb->protocol = skb->protocol;
+    nskb->len = skb->len;
+    nskb->dlen = skb->dlen;
+    nskb->seq = skb->seq;
+    nskb->end_seq = skb->end_seq;
+    nskb->dev = skb->dev;
+    nskb->rt = skb->rt;
+    nskb->sacked = skb->sacked;
+    nskb->tcpcsum = skb->tcpcsum;
+
+    return nskb;
+}
+
 void *skb_reserve(struct sk_buff *skb, unsigned int len)
 {
     skb->data += len;

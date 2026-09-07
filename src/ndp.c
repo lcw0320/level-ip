@@ -95,6 +95,7 @@ void ndp_flush_queue(struct ndp_entry *entry)
 int ndp_queue_skb(struct in6_addr *ip6, struct sk_buff *skb)
 {
     struct ndp_entry *entry = NULL;
+    struct sk_buff *copy = NULL;
 
     entry = ndp_lookup(ip6);
     if (entry == NULL) {
@@ -107,7 +108,10 @@ int ndp_queue_skb(struct in6_addr *ip6, struct sk_buff *skb)
         return -1;
     }
 
-    skb_queue_tail(&entry->queue, skb);
+    /* skb 可能仍挂在 TCP write_queue，节点不能复用，拷贝独立 skb */
+    copy = skb_copy(skb);
+
+    skb_queue_tail(&entry->queue, copy);
 
     return 0;
 }
