@@ -14,7 +14,7 @@ lvl-ip: $(obj)
 build/%.o: src/%.c ${headers}
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
 
-debug: CFLAGS+= -DDEBUG_SOCKET -DDEBUG_TCP -DDEBUG_UDP -DDEBUG_IP -DDEBUG_IPV6 -DDEBUG_ICMPV6 -DDEBUG_NDP -DDEBUG_ADDRCONF -g
+debug: CFLAGS+= -DDEBUG_SOCKET -DDEBUG_TCP -DDEBUG_UDP -DDEBUG_IP -DDEBUG_IPV6 -DDEBUG_ICMPV6 -DDEBUG_NDP -DDEBUG_ADDRCONF -fsanitize=address -g
 debug: lvl-ip
 
 apps: $(apps)
