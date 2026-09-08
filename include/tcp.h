@@ -292,7 +292,7 @@ struct sock *tcp_alloc_sock();
 int tcp_v4_init_sock(struct sock *sk);
 int tcp_init_sock(struct sock *sk);
 void __tcp_set_state(struct sock *sk, uint32_t state);
-int tcp_v4_checksum(struct sk_buff *skb, uint32_t saddr, uint32_t daddr);
+int tcp_v4_tcp_partion_checksum(struct sk_buff *skb);
 int tcp_v6_tcp_partion_checksum(struct sk_buff *skb);
 int tcp_v4_connect(struct sock *sk, const struct sockaddr *addr, socklen_t addrlen, int flags);
 int tcp_v6_connect(struct sock *sk, const struct sockaddr *addr, socklen_t addrlen, int flags);

@@ -143,7 +143,7 @@ static int tcp_transmit_skb(struct sock *sk, struct sk_buff *skb, uint32_t seq)
         skb->tcpcsum = tcp_v6_tcp_partion_checksum(skb);
         return ipv6_output(skb, NEXTHDR_TCP, &sk->saddr.v6, &sk->daddr.v6);
     } else {
-        thdr->csum = checksum(skb->data, skb->len, 0);
+        skb->tcpcsum = tcp_v4_tcp_partion_checksum(skb);
         return ip_output(sk, skb);
     }
 }

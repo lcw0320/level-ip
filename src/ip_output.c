@@ -2,6 +2,7 @@
 #include "skbuff.h"
 #include "utils.h"
 #include "udp.h"
+#include "tcp.h"
 #include "ip.h"
 #include "dst.h"
 #include "route.h"
@@ -12,10 +13,22 @@ void ip_send_check(struct iphdr *ihdr)
     ihdr->csum = csum;
 }
 
+/* IPv4 pseudo-header checksum, address part, folded on top of skb->tcpcsum */
+static int tcp_v4_ip_partion_checksum(uint32_t saddr, uint32_t daddr, uint32_t csum)
+{
+    uint8_t pseudo[8] = {0};
+
+    memcpy(pseudo, &saddr, 4);
+    memcpy(pseudo + 4, &daddr, 4);
+
+    return checksum(pseudo, 8, csum);
+}
+
 int ip_output(struct sock *sk, struct sk_buff *skb)
 {
     struct rtentry *rt;
     struct iphdr *ihdr = ip_hdr(skb);
+    struct tcphdr *thdr = NULL;
 
     rt = route_lookup(sk->daddr.v4);
 
@@ -54,6 +67,9 @@ int ip_output(struct sock *sk, struct sk_buff *skb)
     if (ihdr->proto == IP_UDP) {
         struct udphdr *udphdr = udp_hdr(skb);
         udphdr->csum = calcuate_udp_checksum(ihdr->saddr, ihdr->daddr, udphdr);
+    } else if (ihdr->proto == IP_TCP) {
+        thdr = (struct tcphdr *)(skb->data + IP_HDR_LEN);
+        thdr->csum = tcp_v4_ip_partion_checksum(ihdr->saddr, ihdr->daddr, skb->tcpcsum);
     }
 
     ip_send_check(ihdr);

@@ -136,22 +136,23 @@ void tcp_in_v6(struct sk_buff *skb, uint8_t *payload)
     socket_release(sk->sock);
 }
 
-int tcp_udp_checksum(uint32_t saddr, uint32_t daddr, uint8_t proto,
-                     uint8_t *data, uint16_t len)
+/* TCP IPv4 pseudo-header checksum (RFC 793), TCP-layer part:
+ * sums zero/proto/len and the segment; addresses are added in ip_output. */
+int tcp_v4_tcp_partion_checksum(struct sk_buff *skb)
 {
     uint32_t sum = 0;
+    uint32_t len = 0;
+    uint8_t pseudo[4] = {0};
 
-    sum += saddr;
-    sum += daddr;
-    sum += htons(proto);
-    sum += htons(len);
-    
-    return checksum(data, len, sum);
-}
+    len = skb->len;
+    pseudo[1] = IP_TCP;
+    pseudo[2] = (uint8_t)(len >> 8);
+    pseudo[3] = (uint8_t)(len & 0xFF);
 
-int tcp_v4_checksum(struct sk_buff *skb, uint32_t saddr, uint32_t daddr)
-{
-    return tcp_udp_checksum(saddr, daddr, IP_TCP, skb->data, skb->len);
+    sum += sum_every_16bits(pseudo, 4);
+    sum += sum_every_16bits(skb->data, skb->len);
+
+    return sum;
 }
 
 /*
