@@ -48,10 +48,10 @@ void udp_in(struct sk_buff *skb)
         goto discard;
     }
     udp_init_head(th, skb);
-    sk = inet_lookup(skb, 0, 0, th->sport, th->dport);
+    sk = inet_udp_lookup(skb, th->sport, th->dport);
 
     if (sk == NULL) {
-        print_err("No UDP socket for sport %d dport %d\n",
+        print_debug("No UDP socket for sport %d dport %d",
                   th->sport, th->dport);
         free_skb(skb);
         return;

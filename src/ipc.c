@@ -199,7 +199,7 @@ static int ipc_accept(int sockfd, struct ipc_msg *msg)
     struct ipc_accept *payload = (struct ipc_accept*)msg->data;
     pid_t pid = msg->pid;
     uint8_t addr[sizeof(struct sockaddr_in6)];
-    socklen_t addr_len = payload->addr_len;
+    socklen_t addr_len = payload->addr.sa_len;
     int rc = -1;
 
     memset(addr, 0, sizeof(addr));
@@ -228,7 +228,6 @@ static int ipc_accept(int sockfd, struct ipc_msg *msg)
     memcpy(actual->addr.sa_data, addr,
            addr_len < sizeof(actual->addr.sa_data) ? addr_len : sizeof(actual->addr.sa_data));
     actual->addr.sa_len = addr_len < sizeof(actual->addr.sa_data) ? addr_len : sizeof(actual->addr.sa_data);
-    memcpy(&actual->addr_len, &addr_len, sizeof(socklen_t));
 
     if (ipc_try_send(sockfd, (char *)response, resplen) == -1) {
         perror("Error on writing IPC read response");

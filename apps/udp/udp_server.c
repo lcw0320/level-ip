@@ -16,7 +16,7 @@ int get_address(char *host, char *port, struct sockaddr *addr)
     int s;
 
     memset(&hints, 0, sizeof(struct addrinfo));
-    hints.ai_family = AF_INET;
+    hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_DGRAM;
 
     s = getaddrinfo(host, port, &hints, &result);
@@ -93,7 +93,8 @@ int main(int argc, char **argv)
     socklen_t srcaddrLen = sizeof(struct sockaddr);
 
     if (bind(sock, &bindaddr, sizeof(bindaddr)) < 0) {
-        printf("error bind addr");
+        printf("error bind addr, errmsg: %s\n", strerror(errno));
+        return;
     }
 
     while ((rlen = recvfrom(sock, buf, RLEN, 0, &srcaddr, &srcaddrLen)) > 0) {

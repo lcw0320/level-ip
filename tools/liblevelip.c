@@ -340,10 +340,10 @@ int accept(int sockfd, struct sockaddr *__restrict__ addr, socklen_t *__restrict
     payload.sockfd = sockfd;
     memcpy(payload.addr.sa_data, addr, SA_COPY_LEN(*addr_len));
     payload.addr.sa_len = SA_COPY_LEN(*addr_len);
-    payload.addr_len = *addr_len;
 
     memcpy(msg->data, &payload, sizeof(struct ipc_accept));
 
+    print_debug("IPC accept message prepared: sockfd %d, payload addr_len %d", sockfd, payload.addr.sa_len);
     // Send mocked syscall to lvl-ip
     if (_write(sock->lvlfd, (char *)msg, msglen) == -1) {
         perror("Error on writing IPC read");

@@ -283,6 +283,23 @@ struct sock *inet_lookup(struct sk_buff *skb, uint32_t saddr, uint32_t daddr, ui
     return sock->sk;
 }
 
+/*
+ * inet_udp_lookup - UDP socket lookup for incoming IPv4 datagrams.
+ * UDP is connectionless: only the destination (local) port identifies
+ * the socket, there is no LISTEN fallback like TCP.
+ */
+struct sock *inet_udp_lookup(struct sk_buff *skb, uint16_t sport, uint16_t dport)
+{
+    struct socket *sock = NULL;
+
+    sock = socket_lookup_udp(AF_INET, dport);
+    if (sock == NULL) {
+        return NULL;
+    }
+
+    return sock->sk;
+}
+
 int inet_close(struct socket *sock)
 {
     if (!sock) {

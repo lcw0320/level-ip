@@ -187,6 +187,7 @@ int main(int argc, char **argv)
     }
 
     for (;;) {
+        memset(&acceptaddr, 0, sizeof(acceptaddr));
         int acceptFd = accept(sock, &acceptaddr, &addrlen);
         if (acceptFd < 0) {
             printf("acccept error: %s\n", strerror(errno));

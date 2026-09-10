@@ -101,6 +101,7 @@ int _getsockname(pid_t pid, int socket, struct sockaddr *restrict address,
 struct socket *socket_lookup(uint8_t family, uint32_t saddr, uint32_t daddr,
                              const struct in6_addr *saddr6, const struct in6_addr *daddr6,
                              uint16_t sport, uint16_t dport);
+struct socket *socket_lookup_udp(uint8_t family, uint16_t localport);
 struct socket *socket_find(struct socket *sock);
 struct socket *socker_find_protocol_port(uint16_t port, int protocol);
 int socket_rd_acquire(struct socket *sock);

@@ -85,7 +85,6 @@ struct ipc_listen {
 struct ipc_accept {
     int sockfd;
     struct ipc_sockaddr addr;
-    socklen_t addr_len;
 } __attribute__((packed));
 
 struct ipc_sendto {

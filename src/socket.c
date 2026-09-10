@@ -186,11 +186,66 @@ out:
     return sock;
 }
 
-struct socket *socket_lookup(uint8_t family, uint32_t remotesaddr, uint32_t localsaddr,
-                             const struct in6_addr *remote6, const struct in6_addr *local6,
-                             uint16_t remoteport, uint16_t localport)
+/*
+ * tcp_sock_match_established - check a non-LISTEN TCP sock against the
+ * exact 4-tuple of an incoming segment (v4 or v6 per family).
+ */
+static int tcp_sock_match_established(struct sock *sk, uint8_t family,
+                                      uint32_t remotesaddr, uint32_t localsaddr,
+                                      const struct in6_addr *remote6, const struct in6_addr *local6,
+                                      uint16_t remoteport, uint16_t localport)
 {
-    struct list_head *item;
+    if (sk->protocol != IPPROTO_TCP || sk->state == TCP_LISTEN) {
+        return 0;
+    }
+
+    if (sk->sport != localport || sk->dport != remoteport) {
+        return 0;
+    }
+
+    if (family == AF_INET6) {
+        return (remote6 != NULL && local6 != NULL &&
+                memcmp(&sk->daddr.v6, remote6, sizeof(struct in6_addr)) == 0 &&
+                memcmp(&sk->saddr.v6, local6, sizeof(struct in6_addr)) == 0);
+    }
+
+    return (sk->daddr.v4 == remotesaddr && sk->saddr.v4 == localsaddr);
+}
+
+/*
+ * tcp_sock_match_listener - check whether a LISTEN TCP sock accepts
+ * segments for localport. A socket bound to the unspecified address
+ * (wildcard) accepts any destination address.
+ */
+static int tcp_sock_match_listener(struct sock *sk, uint8_t family,
+                                   uint32_t localsaddr, const struct in6_addr *local6,
+                                   uint16_t localport)
+{
+    if (sk->protocol != IPPROTO_TCP || sk->state != TCP_LISTEN) {
+        return 0;
+    }
+
+    if (sk->sport != localport) {
+        return 0;
+    }
+
+    if (family == AF_INET6) {
+        return (local6 == NULL || ipv6_addr_is_unspecified(local6) ||
+                memcmp(&sk->saddr.v6, local6, sizeof(struct in6_addr)) == 0);
+    }
+
+    return (sk->saddr.v4 == localsaddr);
+}
+
+/*
+ * tcp_lookup_established - lookup phase 1 (kernel __inet_lookup_established):
+ * walk all sockets looking for an exact 4-tuple match on a connected sock.
+ */
+static struct socket *tcp_lookup_established(uint8_t family, uint32_t remotesaddr, uint32_t localsaddr,
+                                             const struct in6_addr *remote6, const struct in6_addr *local6,
+                                             uint16_t remoteport, uint16_t localport)
+{
+    struct list_head *item = NULL;
     struct socket *sock = NULL;
     struct sock *sk = NULL;
 
@@ -199,71 +254,113 @@ struct socket *socket_lookup(uint8_t family, uint32_t remotesaddr, uint32_t loca
     list_for_each(item, &sockets) {
         sock = list_entry(item, struct socket, list);
 
-        if (sock == NULL || sock->sk == NULL) continue;
-        sk = sock->sk;
-
-        /* Filter by address family first */
-        if (sk->addr_family != family) continue;
-
-        switch (sk->protocol) {
-        case IPPROTO_TCP:
-            if (sk->state != TCP_LISTEN) {
-                if (family == AF_INET6) {
-                    if (sk->sport == localport && sk->dport == remoteport &&
-                        remote6 != NULL && local6 != NULL &&
-                        memcmp(&sk->daddr.v6, remote6, sizeof(struct in6_addr)) == 0 &&
-                        memcmp(&sk->saddr.v6, local6, sizeof(struct in6_addr)) == 0) {
-                        goto found;
-                    }
-                } else {
-                    if (sk->sport == localport && sk->dport == remoteport &&
-                        sk->daddr.v4 == remotesaddr && sk->saddr.v4 == localsaddr) {
-                        goto found;
-                    }
-                }
-            }
-            break;
-        case IPPROTO_UDP:
-            if (family != AF_INET6 && sk->sport == localport) {
-                goto found;
-            }
-            break;
-        default:
-            break;
+        if (sock == NULL || sock->sk == NULL) {
+            continue;
         }
-    }
-
-    /* Fall back to LISTEN sockets */
-    list_for_each(item, &sockets) {
-        sock = list_entry(item, struct socket, list);
-
-        if (sock == NULL || sock->sk == NULL) continue;
         sk = sock->sk;
 
-        if (sk->addr_family != family) continue;
+        if (sk->addr_family != family) {
+            continue;
+        }
 
-        switch (sk->protocol) {
-        case IPPROTO_TCP:
-            if (sk->state == TCP_LISTEN && sk->sport == localport) {
-                if (family == AF_INET6) {
-                    /* IPv6 LISTEN: match local address if specified */
-                    if (local6 == NULL || ipv6_addr_is_unspecified(local6) ||
-                        memcmp(&sk->saddr.v6, local6, sizeof(struct in6_addr)) == 0) {
-                        goto found;
-                    }
-                } else {
-                    if (sk->saddr.v4 == localsaddr) {
-                        goto found;
-                    }
-                }
-            }
-            break;
-        default:
-            break;
+        if (tcp_sock_match_established(sk, family, remotesaddr, localsaddr,
+                                       remote6, local6, remoteport, localport)) {
+            goto found;
         }
     }
 
     sock = NULL;
+
+found:
+    pthread_rwlock_unlock(&slock);
+    return sock;
+}
+
+/*
+ * tcp_lookup_listener - lookup phase 2 (kernel __inet_lookup_listener):
+ * fall back to LISTEN sockets matching the local port, wildcard address OK.
+ */
+static struct socket *tcp_lookup_listener(uint8_t family, uint32_t localsaddr,
+                                          const struct in6_addr *local6, uint16_t localport)
+{
+    struct list_head *item = NULL;
+    struct socket *sock = NULL;
+    struct sock *sk = NULL;
+
+    pthread_rwlock_rdlock(&slock);
+
+    list_for_each(item, &sockets) {
+        sock = list_entry(item, struct socket, list);
+
+        if (sock == NULL || sock->sk == NULL) {
+            continue;
+        }
+        sk = sock->sk;
+
+        if (sk->addr_family != family) {
+            continue;
+        }
+
+        if (tcp_sock_match_listener(sk, family, localsaddr, local6, localport)) {
+            goto found;
+        }
+    }
+
+    sock = NULL;
+
+found:
+    pthread_rwlock_unlock(&slock);
+    return sock;
+}
+
+/*
+ * socket_lookup - TCP two-phase lookup (kernel __inet_lookup shape):
+ * exact 4-tuple on connected sockets first, LISTEN fallback second.
+ * UDP sockets are looked up via socket_lookup_udp() instead.
+ */
+struct socket *socket_lookup(uint8_t family, uint32_t remotesaddr, uint32_t localsaddr,
+                             const struct in6_addr *remote6, const struct in6_addr *local6,
+                             uint16_t remoteport, uint16_t localport)
+{
+    struct socket *sock = NULL;
+
+    sock = tcp_lookup_established(family, remotesaddr, localsaddr, remote6, local6,
+                                  remoteport, localport);
+    if (sock != NULL) {
+        return sock;
+    }
+
+    return tcp_lookup_listener(family, localsaddr, local6, localport);
+}
+
+/*
+ * socket_lookup_udp - UDP lookup (kernel __udp4_lib_lookup shape).
+ * UDP is connectionless: no LISTEN state, match by family + local port only.
+ */
+struct socket *socket_lookup_udp(uint8_t family, uint16_t localport)
+{
+    struct list_head *item = NULL;
+    struct socket *sock = NULL;
+    struct sock *sk = NULL;
+
+    pthread_rwlock_rdlock(&slock);
+
+    list_for_each(item, &sockets) {
+        sock = list_entry(item, struct socket, list);
+
+        if (sock == NULL || sock->sk == NULL) {
+            continue;
+        }
+        sk = sock->sk;
+
+        if (sk->addr_family == family && sk->protocol == IPPROTO_UDP &&
+            sk->sport == localport) {
+            goto found;
+        }
+    }
+
+    sock = NULL;
+
 found:
     pthread_rwlock_unlock(&slock);
     return sock;
