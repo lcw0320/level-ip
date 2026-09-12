@@ -1,5 +1,6 @@
 #ifndef UTILS_H
 #define UTILS_H
+#include <time.h>
 
 #define CMDBUFLEN 100
 
@@ -22,8 +23,16 @@
 #define sockaddr_addr(sockaddr) ((uint32_t)(((struct sockaddr_in *)addr)->sin_addr.s_addr))
 #define sockaddr_port(sockaddr) ((uint16_t)(((struct sockaddr_in *)sockaddr)->sin_port))
 
-#define print_debug(str, ...)                       \
-    printf(str" - %s:%u\n", ##__VA_ARGS__, __FILE__, __LINE__);
+#define print_debug(str, ...)                                          \
+    do {                                                               \
+        time_t now = time(NULL);                                       \
+        struct tm t_buf;                                               \
+        localtime_r(&now, &t_buf);                                     \
+        char time_str[32];                                             \
+        strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", &t_buf); \
+        printf("[%s] " str " - %s:%u\n",                               \
+               time_str, ##__VA_ARGS__, __FILE__, __LINE__);           \
+    } while(0)
 
 #define print_err(str, ...)                     \
     fprintf(stderr, str, ##__VA_ARGS__);
