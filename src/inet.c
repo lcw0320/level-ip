@@ -222,7 +222,8 @@ int inet_stream_accept(struct socket *sock, struct sockaddr *__restrict__ addr, 
     }
 
     if (addr->sa_family == AF_UNSPEC) {
-        return -EAFNOSUPPORT;
+        // todo: accetc specific address
+        print_debug("does not support sa_family paramter\n");
     }
 
     return sk->ops->accept(sk, addr, addr_len);
