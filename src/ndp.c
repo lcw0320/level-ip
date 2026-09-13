@@ -236,8 +236,15 @@ int ndp_send_ns(struct in6_addr *target, struct in6_addr *src,
     ns->csum = icmpv6_checksum(src, &dst_mc,
                                (uint8_t *)ns, (uint16_t)pktlen);
 
-    ndp_dbg("send NS for target address");
+    char src_str[INET6_ADDRSTRLEN];
+    char dst_str[INET6_ADDRSTRLEN];
 
+    // 将二进制地址转换为可读的字符串
+    inet_ntop(AF_INET6, &ip6h->saddr, src_str, sizeof(src_str));
+    inet_ntop(AF_INET6, &ip6h->daddr, dst_str, sizeof(dst_str));
+
+    // 使用标准的 %s 打印
+    ndp_dbg("NDP: send NS src=%s dst=%s\n", src_str, dst_str);
     /* 5. Send to the Ethernet multicast MAC */
     ipv6_multicast_mac(&dst_mc, dst_mac);
     netdev_transmit(skb, dst_mac, ETH_P_IPV6);

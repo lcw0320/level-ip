@@ -62,7 +62,7 @@ int tcp_data_dequeue(struct tcp_sock *tsk, void *user_buf, int userlen)
         struct sk_buff *skb = skb_peek(&sk->receive_queue);
         if (skb == NULL) break;
         
-        th = tcp_hdr(skb);
+        th = tcp_hdr_for_sk(sk, skb);
 
         /* Guard datalen to not overflow userbuf */
         int dlen = (rlen + skb->dlen) > userlen ? (userlen - rlen) : skb->dlen;

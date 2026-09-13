@@ -287,7 +287,7 @@ int tcp_send_next(struct sock *sk, int amount, uint32_t extra)
         next->end_seq = tcb->snd_nxt;
         tsk->inflight += next->dlen;
 
-        th = tcp_hdr(next);
+        th = tcp_hdr_for_sk(sk, next);
         if (th->fin) {
             tcb->snd_nxt++;
         }

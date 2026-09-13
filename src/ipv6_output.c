@@ -38,7 +38,6 @@ int ipv6_output_ex(struct sk_buff *skb, uint8_t nexthdr,
 {
     struct rtentry *rt = NULL;
     struct ipv6hdr *ip6h = NULL;
-    struct tcphdr *thdr = (struct tcphdr *)skb->data;
 
     /* 1. IPv6 route lookup */
     rt = route6_lookup(daddr);
@@ -87,11 +86,13 @@ int ipv6_output_ex(struct sk_buff *skb, uint8_t nexthdr,
 
     ipv6_dbg("out", ip6h);
 
-    struct in6_addr src_addr, dst_addr;
-    memcpy(&src_addr, &ip6h->saddr, sizeof(struct in6_addr));
-    memcpy(&dst_addr, &ip6h->daddr, sizeof(struct in6_addr));
-
-    thdr->csum = tcp_v6_ip_partion_checksum(&src_addr, &dst_addr, skb->tcpcsum);
+    if (ip6h->nexthdr == NEXTHDR_TCP) {
+        struct tcphdr *thdr = (struct tcphdr *)(skb->head + ETH_HDR_LEN + IPV6_HDR_LEN);
+        struct in6_addr src_addr, dst_addr = {0};
+        memcpy(&src_addr, &ip6h->saddr, sizeof(struct in6_addr));
+        memcpy(&dst_addr, &ip6h->daddr, sizeof(struct in6_addr));
+        thdr->csum = tcp_v6_ip_partion_checksum(&src_addr, &dst_addr, skb->tcpcsum);
+    }
 
     /* 4. Link-layer delivery via NDP (stub) / broadcast fallback */
     return dst6_neigh_output(skb);

@@ -266,12 +266,6 @@ struct tcp_sock {
     struct tcp_passive_conn tcp_passive_conn_queue;
 };
 
-static inline struct tcphdr *tcp_hdr(const struct sk_buff *skb)
-{
-    /* RX path: IPv4 only.  For IPv6, tcp_in_v6 gets the pointer directly. */
-    return (struct tcphdr *)(skb->head + ETH_HDR_LEN + IP_HDR_LEN);
-}
-
 /* TX path: family-aware TCP header location.
  * tcp_alloc_skb reserves the correct IP header size based on family. */
 static inline struct tcphdr *tcp_hdr_for_sk(const struct sock *sk,
