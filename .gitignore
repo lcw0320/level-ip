@@ -18,3 +18,5 @@ apps/curl-poll/curl-poll
 lvl-ip-test.log
 apps/tcp-server/server
 test.txt
+apps/curl-verify/curl-verify
+download.bin

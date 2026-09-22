@@ -33,6 +33,15 @@ sudo tc qdisc add dev tap0 root handle 1: htb default 10
 sudo tc class add dev tap0 parent 1: classid 1:10 htb rate 100mbit
 ```
 
+### 测试文件（所有场景共用）
+
+curl 示例固定请求 `GET /`（[apps/curl/curl.c](../apps/curl/curl.c) 中硬编码），而 `http.server` 对目录请求会优先返回目录下的 `index.html`，因此把 1MB 测试文件命名为 `index.html`：
+
+```bash
+mkdir -p /tmp/wwwroot
+dd if=/dev/urandom of=/tmp/wwwroot/index.html bs=1M count=1
+```
+
 ### 监控工具
 
 两个终端分别运行，整个测试过程保持开启：
@@ -56,15 +65,15 @@ sudo tcpdump -i tap0 -nn -S tcp
 ### 步骤
 
 ```bash
-# 1. 启动 HTTP 服务端（host 侧）
-python2.7 -m SimpleHTTPServer 8010 &
+# 1. 启动 HTTP 服务端（host 侧；子 shell 进入 wwwroot，不影响后续 ./lvl-ip 相对路径）
+(cd /tmp/wwwroot && python3 -m http.server 8081 --bind 10.0.0.5) &
 
 # 2. 启动 lvl-ip
 ./lvl-ip &
 sleep 2
 
-# 3. 发起大文件下载（至少 10×SMSS 才能观察到慢启动爬升过程）
-tools/level-ip apps/curl/curl 10.0.0.5 8010
+# 3. 发起 1MB 文件下载（约 1900×SMSS，覆盖完整慢启动爬升；重定向避免二进制刷屏）
+tools/level-ip apps/curl/curl 10.0.0.5 8081 > /dev/null
 ```
 
 ### 观测要点
@@ -98,7 +107,7 @@ sudo tc filter add dev tap0 parent 1: protocol ip prio 3 u32 \
     flowid 1:11 match ip dport 8011 0xffff
 sudo tc qdisc add dev tap0 parent 1:11 netem loss 100% limit 10  # 先全丢
 
-python2.7 -m SimpleHTTPServer 8011 &
+(cd /tmp/wwwroot && python3 -m http.server 8011 --bind 10.0.0.5) &
 ./lvl-ip &
 sleep 2
 tools/level-ip apps/curl/curl 10.0.0.5 8011 &    # 会 RTO
@@ -140,7 +149,7 @@ sudo tc filter add dev tap0 parent 1: protocol ip prio 2 u32 \
     flowid 1:12 match ip dport 8012 0xffff
 sudo tc qdisc add dev tap0 parent 1:12 netem loss 25%
 
-python2.7 -m SimpleHTTPServer 8012 &
+(cd /tmp/wwwroot && python3 -m http.server 8012 --bind 10.0.0.5) &
 ./lvl-ip &
 sleep 2
 tools/level-ip apps/curl/curl 10.0.0.5 8012

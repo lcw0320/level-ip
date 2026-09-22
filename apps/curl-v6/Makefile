@@ -1,2 +1,6 @@
 curl-v6: curl-v6.c
 	$(CC) curl-v6.c -o curl-v6
+
+.PHONY: clean
+clean:
+	rm -f curl-v6 
