@@ -1,9 +1,14 @@
 /*
- * curl-verify: 大文件下载测试专用 HTTP 客户端
- * 基于 apps/curl/curl.c，响应体落盘 download.bin，
- * 并用 Content-Length + SHA-256 校验传输完整性。
+ * curl-verify: 拥塞控制测试专用收发客户端
  *
- * Usage: curl-verify HOST PORT [EXPECTED_SHA256]
+ * 下载模式: 响应体落盘 download.bin，Content-Length + SHA-256 校验
+ *           （测 lvl-ip 接收路径：乱序 / dupACK / 接收窗口）
+ * 上传模式: 发送指定文件，服务端回传 SHA-256 比对
+ *           （测 lvl-ip 发送路径：重传 / RTO / cwnd）
+ *
+ * Usage:
+ *   curl-verify HOST PORT [EXPECTED_SHA256]
+ *   curl-verify -u HOST PORT FILE
  */
 
 #include <string.h>
@@ -18,7 +23,8 @@
 
 #define MAX_HOSTNAME 50
 #define RLEN 4096
-#define HDRBUF_SIZE 1024
+#define HDRBUF_SIZE 5120
+#define REPLY_SIZE 128
 
 /* ═══ Static helpers (internal) ═══════════════════ */
 
@@ -47,6 +53,25 @@ static int get_address(char *host, char *port, struct sockaddr *addr)
     }
 
     return 1;
+}
+
+/* 循环 write，处理部分写
+ * @return 成功 0，失败 -1 */
+static int write_all(int sock, const uint8_t *data, int len)
+{
+    int off = 0;
+    int n = 0;
+
+    while (off < len) {
+        n = write(sock, data + off, len - off);
+        if (n <= 0) {
+            perror("write error");
+            return -1;
+        }
+        off += n;
+    }
+
+    return 0;
 }
 
 /* 定位 HTTP 响应头结束位置并解析 Content-Length
@@ -115,7 +140,8 @@ static int verify_result(long total, long content_length, const char *hex, const
 
 /* ═══ Global functions (public API) ═══════════════ */
 
-int main(int argc, char **argv)
+/* 下载模式：GET / ，响应体落盘并校验 */
+static int run_download(int argc, char **argv)
 {
     struct sockaddr addr;
     sha256_ctx ctx = {0};
@@ -135,33 +161,28 @@ int main(int argc, char **argv)
     long content_length = -1;
     FILE *fp = NULL;
 
-    if (argc != 3 && argc != 4) {
-        printf("Usage: curl-verify HOST PORT [EXPECTED_SHA256]\n");
-        return 1;
-    }
-
     if (strnlen(argv[1], MAX_HOSTNAME) == MAX_HOSTNAME || strnlen(argv[2], 6) == 6) {
         printf("HOST or PORT invalid\n");
         return 1;
     }
 
     if (get_address(argv[1], argv[2], &addr) != 0) {
-        printf("Curl could not resolve hostname\n");
+        printf("could not resolve hostname\n");
         return 1;
     }
 
     sock = socket(AF_INET, SOCK_STREAM, 0);
 
     if (connect(sock, &addr, sizeof(addr)) == -1) {
-        perror("Curl could not establish connection");
+        perror("could not establish connection");
         return 1;
     }
 
     snprintf(str, 512, "GET / HTTP/1.1\r\nHost: %s:%s\r\nConnection: close\r\n\r\n", argv[1], argv[2]);
     len = strlen(str);
 
-    if (write(sock, str, len) != len) {
-        printf("Write error\n");
+    if (write_all(sock, (uint8_t *)str, len) != 0) {
+        close(sock);
         return 1;
     }
 
@@ -206,7 +227,7 @@ int main(int argc, char **argv)
     }
 
     if (rlen == -1) {
-        perror("Curl read error");
+        perror("read error");
         fclose(fp);
         close(sock);
         return 1;
@@ -223,4 +244,116 @@ int main(int argc, char **argv)
     close(sock);
 
     return len;
+}
+
+/* 上传模式：发送 PUT <size>\n + 文件原始字节，比对服务端回传的 sha256 */
+static int run_upload(char *host, char *port, char *file)
+{
+    struct sockaddr addr;
+    sha256_ctx ctx = {0};
+    uint8_t hash[SHA256_HASH_LEN] = {0};
+    uint8_t buf[RLEN] = {0};
+    char hex[SHA256_HEX_LEN] = {0};
+    char hdr[64] = {0};
+    char reply[REPLY_SIZE] = {0};
+    int sock = -1;
+    int rlen = 0;
+    long total = 0;
+    long size = 0;
+    FILE *fp = NULL;
+
+    if (strnlen(host, MAX_HOSTNAME) == MAX_HOSTNAME || strnlen(port, 6) == 6) {
+        printf("HOST or PORT invalid\n");
+        return 1;
+    }
+
+    fp = fopen(file, "rb");
+    if (fp == NULL) {
+        perror("could not open upload file");
+        return 1;
+    }
+
+    fseek(fp, 0, SEEK_END);
+    size = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+
+    if (get_address(host, port, &addr) != 0) {
+        printf("could not resolve hostname\n");
+        fclose(fp);
+        return 1;
+    }
+
+    sock = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (connect(sock, &addr, sizeof(addr)) == -1) {
+        perror("could not establish connection");
+        fclose(fp);
+        return 1;
+    }
+
+    snprintf(hdr, sizeof(hdr), "PUT %ld\n", size);
+    if (write_all(sock, (uint8_t *)hdr, strlen(hdr)) != 0) {
+        fclose(fp);
+        close(sock);
+        return 1;
+    }
+
+    sha256_init(&ctx);
+    while ((rlen = fread(buf, 1, RLEN, fp)) > 0) {
+        if (write_all(sock, buf, rlen) != 0) {
+            fclose(fp);
+            close(sock);
+            return 1;
+        }
+        sha256_update(&ctx, buf, rlen);
+        total += rlen;
+    }
+    fclose(fp);
+
+    if (total != size) {
+        printf("Verify FAILED: read %ld bytes, expect %ld\n", total, size);
+        close(sock);
+        return 1;
+    }
+
+    sha256_final(&ctx, hash);
+    sha256_hex(hash, hex);
+
+    rlen = read(sock, reply, sizeof(reply) - 1);
+    if (rlen <= 0) {
+        perror("read upload reply");
+        close(sock);
+        return 1;
+    }
+    reply[rlen] = '\0';
+
+    /* 期望回复: "OK <64位小写hex>\n" */
+    if (strncmp(reply, "OK ", 3) != 0 ||
+        strncasecmp(reply + 3, hex, SHA256_HASH_LEN * 2) != 0) {
+        printf("Verify FAILED: server reply mismatch\n  local  : %s\n  server : %s\n", hex, reply);
+        close(sock);
+        return 1;
+    }
+
+    printf("Uploaded %ld bytes, verify OK\n  sha256: %s\n", total, hex);
+    close(sock);
+
+    return 0;
+}
+
+int main(int argc, char **argv)
+{
+    if (argc == 5 && strcmp(argv[1], "-u") == 0) {
+        return run_upload(argv[2], argv[3], argv[4]);
+    }
+
+    if (argc == 3 || argc == 4) {
+        return run_download(argc, argv);
+    }
+
+    printf("Usage:\n");
+    printf("  curl-verify HOST PORT [EXPECTED_SHA256]    download (GET /)\n");
+    printf("  curl-verify -u HOST PORT FILE              upload FILE\n");
+
+    return 1;
 }

@@ -4,14 +4,48 @@
 
 ---
 
+## 测试方向与工具选择
+
+lvl-ip 的拥塞控制和重传逻辑只作用于它**发送**的数据，因此收发两个方向测的是完全不同的东西：
+
+| 方向 | 工具 | 被测逻辑 |
+|------|------|---------|
+| 上传（lvl-ip 发数据） | `curl-verify -u` | 慢启动、拥塞避免、快速重传、快速恢复、RTO（场景一~六） |
+| 下载（lvl-ip 收数据） | `curl-verify` | 接收路径：乱序缓存、dupACK 发送、接收窗口（场景七） |
+
+注意：纯下载时 lvl-ip 的 `write_queue` 为空，`tcp_clean_rto_queue` 直接停 RTO 定时器，cwnd/RTO/快速重传都不会触发——下载方向丢包时做重传的是 server 侧协议栈。
+
+### curl-verify 用法
+
+```bash
+# 下载：GET /，响应体落盘 download.bin，Content-Length + SHA-256 双重校验
+tools/level-ip apps/curl-verify/curl-verify 10.0.0.5 8081 $(sha256sum /tmp/wwwroot/index.html | cut -d' ' -f1)
+
+# 上传：发送 PUT <size>\n + 文件原始字节，比对服务端回传的 SHA-256
+tools/level-ip apps/curl-verify/curl-verify -u 10.0.0.5 8081 /tmp/wwwroot/index.html
+```
+
+校验失败（字节数不符 / 哈希不一致）打印 `Verify FAILED` 并返回退出码 1。
+
+### 上传服务端
+
+python 的 `http.server` 不接受 PUT（返回 501），上传方向使用配套服务端：
+
+```bash
+python3 tests/upload-server.py 8081 10.0.0.5    # 或不带参数，默认 0.0.0.0:8081
+```
+
+协议：客户端先发一行 `PUT <size>\n`，随后发 size 字节；服务端收满后回 `OK <sha256>\n`。
+
+---
+
 ## 测试环境准备
 
 ### 构建
 
 ```bash
-# 带调试符号和 TCP 调试日志
-make clean
-CFLAGS+="-DDEBUG_TCP" make debug
+# 带调试符号和全套协议调试日志（DEBUG_TCP 已包含）
+make debug
 ```
 
 ### 网络环境（所有场景共用）
@@ -33,9 +67,23 @@ sudo tc qdisc add dev tap0 root handle 1: htb default 10
 sudo tc class add dev tap0 parent 1: classid 1:10 htb rate 100mbit
 ```
 
+丢包方向说明（重要）：
+
+- **下行（server → lvl-ip）**：tap0 egress 上只有这部分流量（TAP 方向与真实网卡相反），filter 须匹配 **sport**；
+- **上行（lvl-ip → server）**：10.0.0.5/32 配在 tap0 上，上行包进入内核后直接本地交付，**不经过任何 egress qdisc**（lo 上也抓不到），须用 ifb 把 tap0 ingress 重定向到 ifb0，在 ifb0 上丢包。
+
+上行丢包环境（一次性准备，各场景共用）：
+
+```bash
+sudo modprobe ifb
+sudo ip link set ifb0 up
+```
+
+注意：lvl-ip 每次重启都会销毁并重建 tap0，tap0 上挂的 htb/netem/ingress 全部丢失，重启后需重新执行各场景的 tc 命令（ifb0 是独立模块设备，不受影响）。
+
 ### 测试文件（所有场景共用）
 
-curl 示例固定请求 `GET /`（[apps/curl/curl.c](../apps/curl/curl.c) 中硬编码），而 `http.server` 对目录请求会优先返回目录下的 `index.html`，因此把 1MB 测试文件命名为 `index.html`：
+curl-verify 下载固定请求 `GET /`（apps/curl-verify/curl-verify.c 中硬编码），`http.server` 对目录请求优先返回 `index.html`，因此把 1MB 测试文件命名为 `index.html`；上传直接指定该文件路径：
 
 ```bash
 mkdir -p /tmp/wwwroot
@@ -48,9 +96,9 @@ dd if=/dev/urandom of=/tmp/wwwroot/index.html bs=1M count=1
 
 ```bash
 # 终端 1：抓包，观察 cwnd 推进与重传行为
-sudo tcpdump -i tap0 -nn -S tcp
+sudo tcpdump -i any host 10.0.0.4 -n
 
-# 终端 2：lvl-ip 调试日志（DEBUG_TCP 已编入，直接看 stderr）
+# 终端 2：lvl-ip 调试日志
 ./lvl-ip 2>&1 | grep -E "cwnd|ssthresh|inflight|dupACK|recovery|RTO"
 ```
 
@@ -65,15 +113,15 @@ sudo tcpdump -i tap0 -nn -S tcp
 ### 步骤
 
 ```bash
-# 1. 启动 HTTP 服务端（host 侧；子 shell 进入 wwwroot，不影响后续 ./lvl-ip 相对路径）
-(cd /tmp/wwwroot && python3 -m http.server 8081 --bind 10.0.0.5) &
+# 1. 启动上传服务端（host 侧）
+python3 tests/upload-server.py 8081 10.0.0.5 &
 
 # 2. 启动 lvl-ip
 ./lvl-ip &
 sleep 2
 
-# 3. 发起 1MB 文件下载（约 1900×SMSS，覆盖完整慢启动爬升；重定向避免二进制刷屏）
-tools/level-ip apps/curl/curl 10.0.0.5 8081 > /dev/null
+# 3. 上传 1MB 文件（约 1900×SMSS，覆盖完整慢启动爬升）
+tools/level-ip apps/curl-verify/curl-verify -u 10.0.0.5 8081 /tmp/wwwroot/index.html
 ```
 
 ### 观测要点
@@ -88,7 +136,7 @@ tools/level-ip apps/curl/curl 10.0.0.5 8081 > /dev/null
 
 - 首批 `inflight` 不超过 2144 字节（4×536）。
 - 每收到一个全量 ACK，`cwnd` 增量 ≤ 536 字节。
-- 传输完成，连接正常关闭，无挂起。
+- 上传完成，`verify OK`，连接正常关闭，无挂起。
 
 ---
 
@@ -101,20 +149,27 @@ tools/level-ip apps/curl/curl 10.0.0.5 8081 > /dev/null
 ### 步骤
 
 ```bash
-# 1. 先对 tap0 加大延迟，迫使 RTO 触发（配合 loss 制造丢包后的 RTO）
-sudo tc class add dev tap0 parent 1: classid 1:11 htb rate 100mbit
-sudo tc filter add dev tap0 parent 1: protocol ip prio 3 u32 \
-    flowid 1:11 match ip dport 8011 0xffff
-sudo tc qdisc add dev tap0 parent 1:11 netem loss 100% limit 10  # 先全丢
-
-(cd /tmp/wwwroot && python3 -m http.server 8011 --bind 10.0.0.5) &
+# 1. 先建立传输（连接 + 部分数据），再加丢包，保证 RTO 发生在数据阶段
+python3 tests/upload-server.py 8011 10.0.0.5 &
 ./lvl-ip &
 sleep 2
-tools/level-ip apps/curl/curl 10.0.0.5 8011 &    # 会 RTO
+tools/level-ip apps/curl-verify/curl-verify -u 10.0.0.5 8011 /tmp/wwwroot/index.html &
+
+sleep 1
+# 2. 双向 100% 丢包：tap0 egress（sport 8011）拦 server 下行，tap0 ingress→ifb0 拦 lvl-ip 上行
+sudo tc class add dev tap0 parent 1: classid 1:11 htb rate 100mbit
+sudo tc filter add dev tap0 parent 1: protocol ip prio 3 u32 flowid 1:11 match ip sport 8011 0xffff
+sudo tc qdisc add dev tap0 parent 1:11 handle 110: netem loss 100% limit 10
+sudo tc qdisc add dev tap0 handle ffff: ingress
+sudo tc filter add dev tap0 parent ffff: protocol ip prio 1 u32 \
+    match ip protocol 6 0xff match ip src 10.0.0.4 match ip dport 8011 0xffff \
+    action mirred egress redirect dev ifb0
+sudo tc qdisc add dev ifb0 root handle 2: netem loss 100% limit 10
 
 sleep 3
-# 2. 恢复网络，让 RTO 后的传输完成
-sudo tc qdisc change dev tap0 parent 1:11 netem loss 0%
+# 3. 恢复网络（改为不丢包），观察 cwnd 从 536 重新爬升直至传输完成
+sudo tc qdisc change dev tap0 parent 1:11 netem loss 0% limit 10
+sudo tc qdisc change dev ifb0 root handle 2: netem loss 0% limit 10
 wait
 ```
 
@@ -129,8 +184,9 @@ wait
 ### 验收标准
 
 - RTO 后日志出现 `ssthresh` 被设为合理值（≥ 1072）。
-- `cwnd` 从 536 开始线性（慢启动阶段指数）增长。
+- `cwnd` 从 536 开始增长，慢启动阶段每 ACK 翻倍、拥塞避免阶段线性。
 - 切换拥塞避免后，每轮 RTT 内 `cwnd` 增量 ≤ 536 字节。
+- 最终 `verify OK`。
 
 ---
 
@@ -138,27 +194,23 @@ wait
 
 ### 目标
 
-使用 `netem duplicate` 或 `netem reorder` 制造 3 个重复 ACK，触发 `tcp_fast_retransmit`，验证不等 RTO 即重传丢失段。
+上传方向 25% 丢包使 server 产生 3 个重复 ACK，触发 `tcp_fast_retransmit`，验证不等 RTO 即重传丢失段。
 
 ### 步骤
 
 ```bash
-# 制造 25% 丢包（使对端产生足够多乱序/重复 ACK）
-sudo tc class add dev tap0 parent 1: classid 1:12 htb rate 100mbit
-sudo tc filter add dev tap0 parent 1: protocol ip prio 2 u32 \
-    flowid 1:12 match ip dport 8012 0xffff
-sudo tc qdisc add dev tap0 parent 1:12 netem loss 25%
+# 上行 25% 丢包：tap0 ingress→ifb0，在 ifb0 上丢 lvl-ip 发出的数据段
+# （下行不丢：server 的 dupACK 能可靠到达，快速重传才能及时触发；如需同时模拟下行丢包，另对 tap0 parent 1:12 挂 netem）
+sudo tc qdisc add dev tap0 handle ffff: ingress
+sudo tc filter add dev tap0 parent ffff: protocol ip prio 1 u32 \
+    match ip protocol 6 0xff match ip src 10.0.0.4 match ip dport 8012 0xffff \
+    action mirred egress redirect dev ifb0
+sudo tc qdisc add dev ifb0 root handle 2: netem loss 25% limit 10
 
-(cd /tmp/wwwroot && python3 -m http.server 8012 --bind 10.0.0.5) &
+python3 tests/upload-server.py 8012 10.0.0.5 &
 ./lvl-ip &
 sleep 2
-tools/level-ip apps/curl/curl 10.0.0.5 8012
-```
-
-也可直接复用现有测试套件：
-
-```bash
-cd tests && ./suites/tcp/suite-packet-loss
+tools/level-ip apps/curl-verify/curl-verify -u 10.0.0.5 8012 /tmp/wwwroot/index.html
 ```
 
 ### 观测要点
@@ -168,7 +220,7 @@ tcpdump 中查找：
 ```
 # 快速重传特征：同一 seq 在 RTO 超时前第二次出现
 IP 10.0.0.4.XXXX > 10.0.0.5.8012: Flags [P.], seq S:E  ← 原始
-IP 10.0.0.5.8012 > 10.0.0.4.XXXX: Flags [.], ack S     ← dupACK ×3
+IP 10.0.0.5.8012 > 10.0.0.4.XXXX: Flags [.], ack S     ← dupACK ×3（server 发出）
 IP 10.0.0.4.XXXX > 10.0.0.5.8012: Flags [P.], seq S:E  ← 快速重传
 ```
 
@@ -179,7 +231,7 @@ lvl-ip 日志关键字：`dupacks=3`、`fast_retransmit`、`enter_recovery`。
 - 出现 3 个重复 ACK 后，重传在 RTO 超时前（< `rto` 毫秒）发生。
 - `ssthresh` 被设为 `max(inflight/2, 1072)`。
 - `cwnd` 被 inflate 到 `ssthresh + 3×536`。
-- 传输最终成功完成（无挂起）。
+- 传输最终 `verify OK`（无挂起）。
 
 ---
 
@@ -248,45 +300,81 @@ dupack #3: → enter fast recovery（不再走 Limited Transmit）
 
 ### 目标
 
-验证 RTO 超时路径（`src/tcp_output.c:490`）正确更新 `ssthresh` 和 `cwnd`。
+验证 RTO 超时路径（`src/tcp_output.c`）正确更新 `ssthresh` 和 `cwnd`。
 
 ### 步骤
 
 ```bash
-# 100% 丢包，强制 RTO（默认初始 RTO ~1s，backoff 指数退避）
-sudo tc qdisc add dev tap0 parent 1:13 netem loss 100%
-# ... 启动传输后等待约 3 秒 ...
-# 恢复后观察 ssthresh/cwnd 恢复情况
+python3 tests/upload-server.py 8081 10.0.0.5 &
+./lvl-ip &
+sleep 2
+tools/level-ip apps/curl-verify/curl-verify -u 10.0.0.5 8081 /tmp/wwwroot/index.html &
+
+sleep 1
+# 双向 100% 丢包，RTO backoff 1s→2s→4s…
+sudo tc class add dev tap0 parent 1: classid 1:13 htb rate 100mbit
+sudo tc filter add dev tap0 parent 1: protocol ip prio 4 u32 flowid 1:13 match ip sport 8081 0xffff
+sudo tc qdisc add dev tap0 parent 1:13 handle 130: netem loss 100% limit 10
+sudo tc qdisc add dev tap0 handle ffff: ingress
+sudo tc filter add dev tap0 parent ffff: protocol ip prio 1 u32 \
+    match ip protocol 6 0xff match ip src 10.0.0.4 match ip dport 8081 0xffff \
+    action mirred egress redirect dev ifb0
+sudo tc qdisc add dev ifb0 root handle 2: netem loss 100% limit 10
+
+sleep 5
+# 恢复后观察 ssthresh/cwnd 重置与传输续传
+sudo tc qdisc change dev tap0 parent 1:13 netem loss 0% limit 10
+sudo tc qdisc change dev ifb0 root handle 2: netem loss 0% limit 10
+wait
 ```
 
 ### 验收标准
 
 - RTO 触发时：`ssthresh = max(inflight/2, 1072)`，`cwnd = 536`。
 - backoff 指数增长（1s → 2s → 4s …），最终达 `TCP_USER_TIMEOUT`(180s) 断开。
-- 若网络恢复，cwnd 从 536 重新慢启动，传输继续完成。
+- 若网络恢复，cwnd 从 536 重新慢启动，传输继续完成（`verify OK`）。
+
+---
+
+## 场景七：下载方向接收路径测试
+
+### 目标
+
+下载方向丢包测的是 lvl-ip 的**接收路径**：乱序段缓存、丢段检测、连续 dupACK 发送、接收窗口通告。快速重传由 server 侧（host 协议栈）完成。
+
+### 步骤
+
+```bash
+# 下行 25% 丢包：tap0 egress 上只有 server 下行流量，filter 匹配 sport
+sudo tc class add dev tap0 parent 1: classid 1:12 htb rate 100mbit
+sudo tc filter add dev tap0 parent 1: protocol ip prio 2 u32 flowid 1:12 match ip sport 8012 0xffff
+sudo tc qdisc add dev tap0 parent 1:12 handle 120: netem loss 25% limit 10
+# 上行 ACK 不丢；如需同时丢上行，按场景三的 ifb0 方式另挂（端口 8012）
+
+(cd /tmp/wwwroot && python3 -m http.server 8012 --bind 10.0.0.5) &
+./lvl-ip &
+sleep 2
+tools/level-ip apps/curl-verify/curl-verify 10.0.0.5 8012 $(sha256sum /tmp/wwwroot/index.html | cut -d' ' -f1)
+```
+
+### 观测要点
+
+tcpdump：server 同一 seq 段重复出现（重传）、lvl-ip 对同一 ack 值的重复 ACK。
+
+### 验收标准
+
+- 25% 丢包下传输仍能完成，`verify OK`（Content-Length 与 SHA-256 均通过，即乱序重组无差错）。
+- 无挂起，连接正常关闭。
 
 ---
 
 ## 现有测试套件使用方式
 
-```bash
-# 正常环境（验证基线）
-cd tests && ./suites/tcp/suite-curl
-
-# 25% 丢包（触发快速重传/恢复）
-./suites/tcp/suite-packet-loss
-
-# 2000ms 延迟（触发 RTO 和 backoff）
-./suites/tcp/suite-packet-delay
-
-# 50% 重复包（触发 dupACK，间接测试 Fast Retransmit）
-./suites/tcp/suite-packet-duplication
-```
-
-全部套件一次运行：
+统一 runner（G1 IPv4 回归 / G2 TCP+UDP / G3 netem / G4 IPv6 / G5 TCP over IPv6）：
 
 ```bash
-make test
+sudo bash tests/test-run.sh           # 全部
+sudo bash tests/test-run.sh --quick   # 跳过 G3 netem 组（delay/loss/duplication）
 ```
 
 ---
@@ -298,7 +386,9 @@ make test
 | IW 固定为 4×SMSS，未按 RFC 5681 §3.1 分档 | 慢启动初始窗口偏大，但不影响后续行为验证 |
 | 同一段多次 RTO 重传不抑制 ssthresh 二次缩减 | 极端丢包下 ssthresh 可能被压至最小值 |
 | 无 SACK，Fast Recovery 仅重传队首段 | 多段同时丢包时恢复效率低 |
-| TCP 接收窗口固定 512 字节 | 会限制 cwnd 增长上限（`min(cwnd, rwnd)` 受 rwnd 约束） |
+| 接收窗口固定 44477，无动态窗口管理 | 高延迟链路下吞吐受 `min(cwnd, rwnd)` 约束 |
+| 上行丢包用 ifb ingress 重定向实现 | 上行包经 tap0 ingress 被镜像到 ifb0 丢弃，tap0 egress qdisc 看不到这些包 |
+| netem 丢包发生在 AF_PACKET 抓包点之后 | tcpdump/Wireshark 仍会抓到被丢弃的包及后续重传，勿把抓到的包当作已送达 |
 
 ---
 
